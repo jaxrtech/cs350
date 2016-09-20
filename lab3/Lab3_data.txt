@@ -1,0 +1,9 @@
+1234abcd	4	8
+1234abcd	16	4
+1234abcd	24	4
+ffffffff	9	11
+00000000	7	13
+abcdef01	0	2
+abcdef01	1	0
+abcdef01	16	16
+abcdef01	31	16
