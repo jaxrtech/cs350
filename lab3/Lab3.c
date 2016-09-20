@@ -25,12 +25,19 @@
 
 #include <stdio.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #define DEFAULT_INPUT_PATH  "Lab3_data.txt"
 #define INPUT_COUNT 3
 #define BITMASK_N(N) ((1u << (N)) - 1u)
+#define SIGN_N(X, N) ((X) >> ((N) - 1u))
+#define NEGATIVE_SIGN_BIT 0x01
 
-bool try_read_line(FILE *file, int *val, int *len1, int *len2)
+bool try_read_line(
+        FILE *file,
+        int32_t *val,
+        int32_t *len1,
+        int32_t *len2)
 {
     const int result = fscanf(file, "%x %d %d", val, len1, len2);
     return result == INPUT_COUNT;
@@ -41,33 +48,33 @@ int main (int argc, char *argv[])
 	// Get the filename to open, then open the file. If we can't
 	// open the file, complain and quit.
 	//
-	char *filename;
+	char *path;
 
-    char *filename_arg = argv[1];
-	if (argc >= 2 && filename_arg != NULL) {
-        filename = filename_arg;
+    char *path_arg = argv[1];
+	if (argc >= 2 && path_arg != NULL) {
+        path = path_arg;
     } else {
-        filename = DEFAULT_INPUT_PATH;
-        printf("info: using default input file '%s'\n", filename);
+        path = DEFAULT_INPUT_PATH;
+        printf("info: using default input file '%s'\n", path);
     }
 	
 	// Open the file; if opening fails, say so and return 1.
 	// otherwise say what file we're reading from.
-	FILE *in_file;
-	if (!(in_file = fopen(filename, "r"))) {
-        printf("error: failed to open file '%s'\n", filename);
+	FILE *input_file;
+	if (!(input_file = fopen(path, "r"))) {
+        printf("error: failed to open file '%s'\n", path);
         return 1;
     } else {
-        printf("info: opened file '%s'\n", filename);
+        printf("info: opened file '%s'\n", path);
     }
 
 	// Repeatedly read and process each line of the file.  The
 	// line should have a hex integer and two integer lengths.
 	//
-	int val, len1, len2, len3;
+    int32_t val, len1, len2, len3;
 
 	// Read until we hit end-of-file or a line without the 3 values.
-	while (try_read_line(in_file, &val, &len1, &len2)) {
+	while (try_read_line(input_file, &val, &len1, &len2)) {
 		// We're going to break up the value into bitstrings of
 		// length len1, len2, and len3 (going left-to-right).
 		// The user gives us len1 and len2, and we calculate
@@ -83,44 +90,46 @@ int main (int argc, char *argv[])
 		//     about the lengths not all being positive
         if (!(len1 > 0 && len2 > 0 && len3 > 0)) {
             printf("error: lengths must be > 0\n");
-            printf("     : value = %x, len1 = %d, len2 = %d, len3 = %d",
+            printf("error: value = %x, len1 = %d, len2 = %d, len3 = %d\n\n",
                    val, len1, len2, len3);
 
-            break;
+            continue;
         }
 
         // Calculate the 3 bitstrings x1, x2, x3 of lengths
         // len1, len2, and len3 (reading left-to-right).
         //
-        unsigned int x1 = (unsigned int) val;
+        uint32_t x1 = (uint32_t) val;
         x1 = x1 >> (32 - len1);
         x1 = x1 & BITMASK_N(len1);
 
         // Calculate the value of x2 read as a 1's complement int.
         //
-        unsigned int x2 = (unsigned int) val;
-        x2 = x2 >> len3; // chop right-side
-        x2 = x2 & BITMASK_N(len2);
+        uint32_t x2 = (uint32_t) val;
+        const uint32_t x2_mask = BITMASK_N(len2);
+        x2 = x2 >> len3; // truncate right-side
+        x2 = x2 & x2_mask;
 
-        int x2_complement = 0;
-        const unsigned int x2_sign = x2 >> (len2 - 1);
+        int32_t x2_complement = 0;
+        const uint32_t x2_sign = SIGN_N(x2, len2);
 
-        if (x2_sign == 0x01) {
-            x2_complement = ~x2;
+        if (x2_sign == NEGATIVE_SIGN_BIT) {
+            x2_complement = (int32_t) ((UINT32_MAX & ~x2_mask | x2)) + 1;
         } else {
             x2_complement = x2;
         }
 
         // Calculate the value of x3 read as a 2's complement int.
         //
-        unsigned int x3 = (unsigned int) val;
-        x3 = x3 & BITMASK_N(len3);
+        uint32_t x3 = (uint32_t) val;
+        const uint32_t x3_mask = BITMASK_N(len3);
+        x3 = x3 & x3_mask;
 
-        const unsigned int x3_sign = x3 >> (len3 - 1);
+        const uint32_t x3_sign = x3 >> (len3 - 1);
         int x3_complement = 0;
 
-        if (x3_sign == 0x01) {
-            x3_complement = ~x3 + 1;
+        if (x3_sign == NEGATIVE_SIGN_BIT) {
+            x3_complement = (int32_t) (UINT32_MAX & ~x3_mask | x3);
         } else {
             x3_complement = x3;
         }
@@ -130,7 +139,7 @@ int main (int argc, char *argv[])
         // bitstring (in hex), and its decimal value.  We read x1 as
         // unsigned, x2 in 1's complement, and x3 in 2's complement.
         //
-        printf("Value = %#08x\n", val);
+        printf("Value = %#08x = %d\n", val, val);
         printf("Its leftmost  %2d bits are %#x = %d as an unsigned integer\n",
             len1, x1, x1 );
 
@@ -142,6 +151,11 @@ int main (int argc, char *argv[])
 
 		printf("\n");
 	}
+
+    if (!fclose(input_file)) {
+        printf("error: failed to close input file '%s'\n", path);
+        return 1;
+    }
 
     getchar();
 	return 0;
