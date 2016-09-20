@@ -141,7 +141,7 @@ int main (int argc, char *argv[])
         //
         printf("Value = %#08x = %d\n", val, val);
         printf("Its leftmost  %2d bits are %#x = %d as an unsigned integer\n",
-            len1, x1, x1 );
+            len1, x1, x1);
 
         printf("Its next      %2d bits are %#x = %d in 1's complement\n",
             len2, x2, x2_complement);
