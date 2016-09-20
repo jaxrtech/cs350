@@ -24,13 +24,16 @@
 // (yours and the skeleton's) are fair game for tests.
 
 #include <stdio.h>
+#include <stdbool.h>
 
 #define DEFAULT_INPUT_PATH  "Lab3_data.txt"
-#define INPUT_COUNT_NUM  3
+#define INPUT_COUNT 3
+#define BITMASK_N(N) ((1u << (N)) - 1u)
 
-int read_line(FILE *file, int *val, int *len1, int *len2)
+bool try_read_line(FILE *file, int *val, int *len1, int *len2)
 {
-    return fscanf(file, "%x %d %d", val, len1, len2);
+    const int result = fscanf(file, "%x %d %d", val, len1, len2);
+    return result == INPUT_COUNT;
 }
 
 int main (int argc, char *argv[])
@@ -51,7 +54,7 @@ int main (int argc, char *argv[])
 	// Open the file; if opening fails, say so and return 1.
 	// otherwise say what file we're reading from.
 	FILE *in_file;
-	if (!(in_file = fopen(filename, "r"))) {		// NULL if the open failed
+	if (!(in_file = fopen(filename, "r"))) {
         printf("error: failed to open file '%s'\n", filename);
         return 1;
     } else {
@@ -62,10 +65,9 @@ int main (int argc, char *argv[])
 	// line should have a hex integer and two integer lengths.
 	//
 	int val, len1, len2, len3;
-	int input_count;
 
 	// Read until we hit end-of-file or a line without the 3 values.
-	while ((input_count = read_line(in_file, &val, &len1, &len2)) == INPUT_COUNT_NUM) {
+	while (try_read_line(in_file, &val, &len1, &len2)) {
 		// We're going to break up the value into bitstrings of
 		// length len1, len2, and len3 (going left-to-right).
 		// The user gives us len1 and len2, and we calculate
@@ -90,24 +92,38 @@ int main (int argc, char *argv[])
         // Calculate the 3 bitstrings x1, x2, x3 of lengths
         // len1, len2, and len3 (reading left-to-right).
         //
+        unsigned int x1 = (unsigned int) val;
+        x1 = x1 >> (32 - len1);
+        x1 = x1 & BITMASK_N(len1);
 
+        // Calculate the value of x2 read as a 1's complement int.
+        //
+        unsigned int x2 = (unsigned int) val;
+        x2 = x2 >> (32 - len3); // chop right-side
+        x2 = x2 & BITMASK_N(len2);
+
+        int x2_complement = 0;
+        const unsigned int x2_sign = x2 >> (len2 - 1);
+
+        if (x2_sign == 0x1) {
+            x2_complement = ~x2;
+        } else {
+            x2_complement = x2;
+        }
 
         // Calculate the value of x3 read as a 2's complement int.
         //
         unsigned int x3 = (unsigned int) val;
-        x3 = x3 << (32 - len3);
-        x3 = x3 >> (32 - len3);
+        x3 = x3 & BITMASK_N(len3);
 
-        unsigned int x3_bit = 1 << len3;
-        int x3_complement =
+        const unsigned int x3_sign = x3 >> (len3 - 1);
+        int x3_complement = 0;
 
-        // Calculate the value of x2 read as a 1's complement int.
-        //
-        // TODO
-        int x2 = 0;
-        int x2_complement = 0;
-
-        int x1 = 0;
+        if (x3_sign == 0x1) {
+            x3_complement = ~x3 + 1u;
+        } else {
+            x3_complement = x3;
+        }
 
         // Print out the original value as a hex string, print out
         // (going left-to-right) each length (in decimal) and selected
@@ -122,10 +138,11 @@ int main (int argc, char *argv[])
             len2, x2, x2_complement);
 
         printf("Its remaining %2d bits are %#x = %d in 2's complement\n",
-               len2, x3, x3_complement);
+               len3, x3, x3_complement);
 
 		printf("\n");
-		input_count = fscanf(in_file, "%x %d %d", &val, &len1, &len2);
 	}
+
+    getchar();
 	return 0;
 }
