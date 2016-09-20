@@ -99,13 +99,13 @@ int main (int argc, char *argv[])
         // Calculate the value of x2 read as a 1's complement int.
         //
         unsigned int x2 = (unsigned int) val;
-        x2 = x2 >> (32 - len3); // chop right-side
+        x2 = x2 >> len3; // chop right-side
         x2 = x2 & BITMASK_N(len2);
 
         int x2_complement = 0;
         const unsigned int x2_sign = x2 >> (len2 - 1);
 
-        if (x2_sign == 0x1) {
+        if (x2_sign == 0x01) {
             x2_complement = ~x2;
         } else {
             x2_complement = x2;
@@ -119,8 +119,8 @@ int main (int argc, char *argv[])
         const unsigned int x3_sign = x3 >> (len3 - 1);
         int x3_complement = 0;
 
-        if (x3_sign == 0x1) {
-            x3_complement = ~x3 + 1u;
+        if (x3_sign == 0x01) {
+            x3_complement = ~x3 + 1;
         } else {
             x3_complement = x3;
         }
