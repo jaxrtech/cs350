@@ -60,8 +60,8 @@ int main (int argc, char *argv[])
 	
 	// Open the file; if opening fails, say so and return 1.
 	// otherwise say what file we're reading from.
-	FILE *input_file;
-	if (!(input_file = fopen(path, "r"))) {
+	FILE *input_file = fopen(path, "r");
+	if (input_file == NULL) {
         printf("error: failed to open file '%s'\n", path);
         return 1;
     } else {
@@ -84,12 +84,12 @@ int main (int argc, char *argv[])
 		//
 		len3 = 32 - (len1 + len2);
 
-		// *** STUB ***
 		// if any of the lengths aren't > 0,
 		//     print out the value and the lengths and complain
 		//     about the lengths not all being positive
+        //
         if (!(len1 > 0 && len2 > 0 && len3 > 0)) {
-            printf("error: lengths must be > 0\n");
+            printf("error: lengths must all be > 0\n");
             printf("error: value = %x, len1 = %d, len2 = %d, len3 = %d\n\n",
                    val, len1, len2, len3);
 
@@ -152,11 +152,10 @@ int main (int argc, char *argv[])
 		printf("\n");
 	}
 
-    if (!fclose(input_file)) {
+    if (fclose(input_file) != 0) {
         printf("error: failed to close input file '%s'\n", path);
         return 1;
     }
 
-    getchar();
 	return 0;
 }
