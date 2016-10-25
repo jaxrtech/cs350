@@ -10,6 +10,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <ctype.h>
 
 // A word of SDC memory
 typedef int16_t word_t;
@@ -42,24 +43,24 @@ typedef struct {
 //       instructions sign have a "dummy" negative counterpart.
 typedef enum {
     OPCODE_HALT = INT8_C(0),
-    OPCODE_LD   = INT8_C(1),
-    OPCODE_ST   = INT8_C(2),
-    OPCODE_NST  = INT8_C(-2),
-    OPCODE_ADD  = INT8_C(3),
-    OPCODE_SUB  = INT8_C(-3),
-    OPCODE_NEG  = INT8_C(4),
-    OPCODE_LDM  = INT8_C(5),
+    OPCODE_LD = INT8_C(1),
+    OPCODE_ST = INT8_C(2),
+    OPCODE_NST = INT8_C(-2),
+    OPCODE_ADD = INT8_C(3),
+    OPCODE_SUB = INT8_C(-3),
+    OPCODE_NEG = INT8_C(4),
+    OPCODE_LDM = INT8_C(5),
     OPCODE_NLDM = INT8_C(-5),
     OPCODE_ADDM = INT8_C(6),
     OPCODE_SUBM = INT8_C(-6),
-    OPCODE_BR   = INT8_C(7),
+    OPCODE_BR = INT8_C(7),
     OPCODE_BRGE = INT8_C(+8),
     OPCODE_BRLE = INT8_C(-8),
     OPCODE_GETC = INT8_C(90),
-    OPCODE_OUT  = INT8_C(91),
+    OPCODE_OUT = INT8_C(91),
     OPCODE_PUTS = INT8_C(92),
-    OPCODE_DMP  = INT8_C(93),
-    OPCODE_MEM  = INT8_C(94)
+    OPCODE_DMP = INT8_C(93),
+    OPCODE_MEM = INT8_C(94)
 } opcode_t;
 
 
@@ -82,7 +83,8 @@ typedef enum {
 
 
 int main(int argc, char *argv[]);
-FILE* open_input_file(int argc, char **argv);
+
+FILE *open_input_file(int argc, char **argv);
 
 void cpu_init(cpu_t *cpu);
 void cpu_load_from_file(cpu_t *cpu, FILE *input_file);
@@ -96,16 +98,19 @@ opcode_t mem_get_opcode(word_t mem);
 instr_t mem_read_instr(word_t mem);
 void mem_print_instr(word_t mem);
 
-char* opcode_get_mnemonic(opcode_t opcode);
+char *opcode_get_mnemonic(opcode_t opcode);
 
 uint8_t instr_fields_get_length(instr_fields_t fields);
 
-int read_execute_command(cpu_t *cpu);
-int execute_command(char cmd_char, cpu_t *cpu);
-void help_message(void);
-void many_instruction_cycles(int nbr_cycles, cpu_t *cpu);
-void one_instruction_cycle(cpu_t *cpu);
+bool command_read_execute(cpu_t *cpu);
 
+bool cpu_execute_command(cpu_t *cpu, const char cmd_char);
+
+void print_invalid_command(void);
+void print_help(void);
+
+void cpu_step_n(cpu_t *cpu, int num_cycles);
+void cpu_step(cpu_t *cpu);
 void cpu_halt(cpu_t *cpu);
 
 
@@ -116,41 +121,34 @@ void cpu_halt(cpu_t *cpu);
 int main(int argc, char *argv[])
 {
     printf("SDC Simulator - Part 2\n");
-    printf("CS 350 Lab 5\n");
+    printf("CS 350 Lab 6\n");
     printf("Josh Bowden - Section L03\n");
     printf("~~~\n\n");
 
     FILE *input_file = open_input_file(argc, argv);
 
-    //
-
     cpu_t cpu_value, *cpu = &cpu_value;
     cpu_init(cpu);
-    cpu_dump(cpu);
-    printf("\n~~~\n\n");
-
-    //
-
     cpu_load_from_file(cpu, input_file);
     fclose(input_file);
 
     cpu_dump(cpu);
 
-
     char *prompt = "> ";
     printf("\nBeginning execution; type h for help\n%s", prompt);
 
-    int done = read_execute_command(cpu);
-    while (!done) {
+    bool is_done;
+    do {
         printf("%s", prompt);
-        done = read_execute_command(cpu);
-    }
+        is_done = command_read_execute(cpu);
+    } while (!is_done);
+
     return 0;
 }
 
 // Opens the input optionally specified by command line arguments.
 // The default file path is used otherwise
-FILE* open_input_file(int argc, char **argv)
+FILE *open_input_file(int argc, char **argv)
 {
 #define DEFAULT_INPUT_PATH "default.sdc";
     char *path = NULL;
@@ -210,8 +208,8 @@ void cpu_load_from_file(cpu_t *cpu, FILE *input_file)
         // Ensure that we do not run outside the bounds of the cpu_t's memory
         if (i > CPU_MEMORY_LENGTH - 1) {
             printf("error: line %d: "
-                           "reached maximum memory limit of %d words\n",
-                   line, CPU_MEMORY_LENGTH);
+                    "reached maximum memory limit of %d words\n",
+                line, CPU_MEMORY_LENGTH);
             break;
         }
 
@@ -219,8 +217,8 @@ void cpu_load_from_file(cpu_t *cpu, FILE *input_file)
         // us to stop loading more lines
         if (x < -9999 || x > 9999) {
             printf("info: line %d: "
-                           "read sentinel value outside of range -9999 and 9999. "
-                           "stopped loading.\n", line);
+                "read sentinel value outside of range -9999 and 9999. "
+                "stopped loading.\n", line);
             break;
         }
 
@@ -235,7 +233,8 @@ void cpu_load_from_file(cpu_t *cpu, FILE *input_file)
 void cpu_dump_memory_print_skips(uint32_t skip_count)
 {
     if (skip_count > 0) {
-        printf("| ~~~ |  ~~~~~   (skipped %d empty memory locations)\n", skip_count);
+        printf("| ~~~ |  ~~~~~   (skipped %d empty memory locations)\n",
+               skip_count);
     }
 }
 
@@ -273,7 +272,8 @@ void cpu_dump_memory(cpu_t *cpu)
 
 
 // Prints the current state of the cpu_t including its registers and memory
-void cpu_dump(cpu_t *cpu) {
+void cpu_dump(cpu_t *cpu)
+{
     cpu_dump_registers(cpu);
     cpu_dump_memory(cpu);
 }
@@ -378,7 +378,7 @@ uint8_t instr_fields_get_length(instr_fields_t fields)
 }
 
 // Get the human-readable mnemonic for an opcode.
-char* opcode_get_mnemonic(opcode_t opcode)
+char *opcode_get_mnemonic(opcode_t opcode)
 {
     switch (opcode) {
         case OPCODE_HALT: return "HALT";
@@ -470,47 +470,86 @@ void mem_print_instr(word_t mem)
 }
 
 // Read a simulator command from the keyboard (q, h, ?, d, number,
-// or empty line) and execute it.  Return true if we hit end-of-input
-// or execute_command told us to quit.	Otherwise return false.
+// or empty line) and execute it.
+// Return true if the execution should continue, false otherwise.
 //
-int read_execute_command(cpu_t *cpu) {
-// Buffer to read next command line into
-#define CMD_LINE_LEN 80
-	char cmd_line[CMD_LINE_LEN];
-	char *read_success;		// NULL if reading in a line fails.
+bool command_read_execute(cpu_t *cpu)
+{
+    // Buffer to read next command line into
+#define LINE_BUF_LEN 80
+    char line[LINE_BUF_LEN];
 
-	int nbr_cycles;		// Number of instruction cycles to execute
-	char cmd_char;		// Command 'q', 'h', '?', 'd', or '\n'
-	int done = 0;		// Should simulator stop?
+    char *result = fgets(line, LINE_BUF_LEN, stdin);
+    if (result == NULL) {
+        printf("info: reached end-of-file on input. exiting...\n");
+        return false;
+    }
 
-	read_success = fgets(cmd_line, CMD_LINE_LEN, stdin);
+    char c = line[0];
+    if (!isdigit(c)) {
+        return cpu_execute_command(cpu, c);
+    } else {
+        int n;
+        int matches = sscanf(line, "%d", &n);
+        if (matches != 1) {
+            print_invalid_command();
+            return true;
+        }
 
-	// *** STUB ***	 Quit if read_success indicates end-of-file
-
-	// *** STUB ***
-	// while not done,
-	//    Handle q, h, ?, d commands, integer (nbr of instruction cycles),
-	//      or empty line (one instruction cycle)
-	//    Read next command line, check for eof
-
-	return done;
+        cpu_step_n(cpu, n);
+        return true;
+    }
 }
 
 // Execute a nonnumeric command; complain if it's not 'h', '?',
-// 'd', 'q' or '\n'. Return true for the q command, false otherwise.
+// 'd', 'q' or '\n'.
+// Return true if the execution should continue, false otherwise.
 //
-int execute_command(char cmd_char, cpu_t *cpu) {
-	if (cmd_char == '?' || cmd_char == 'h') {
-		help_message();
-	}
-	// *** STUB ****
-	return 0;
+bool cpu_execute_command(cpu_t *cpu, const char c)
+{
+    switch (c) {
+        case 'q':
+            printf("info: entered quit command. exiting...\n");
+            return false;
+
+        case 'h':
+        case '?':
+            print_help();
+            return true;
+
+        case 'd':
+            cpu_dump(cpu);
+            return true;
+
+        case '\n':
+            cpu_step(cpu);
+            return true;
+
+        default:
+            print_invalid_command();
+            return true;
+    }
+}
+
+// Print out message saying that the command was invalid
+//
+void print_invalid_command(void)
+{
+    printf("error: invalid command. expected 'h', '?', 'd', 'q', '\\n', or integer >= 1\n");
 }
 
 // Print standard message for simulator help command ('h' or '?')
 //
-void help_message(void) {
-	// *** STUB ****
+void print_help(void)
+{
+    printf(
+        "h    print out this help message\n"
+        "?    print out this help message\n"
+        "d    dump CPU and memory\n"
+        "\\n  execute 1 instruction cycle\n"
+        "1..n  execute N instructions cycles\n"
+        "\n"
+    );
 }
 
 // Execute a number of instruction cycles.  Exceptions: If the
@@ -521,47 +560,52 @@ void help_message(void) {
 // If, as we execute the many cycles, the cpu_t stops running,
 // stop and return.
 //
-void many_instruction_cycles(int nbr_cycles, cpu_t *cpu) {
-	int INSANE_NBR_CYCLES = 100;
+void cpu_step_n(cpu_t *cpu, int num_cycles)
+{
+    int INSANE_NBR_CYCLES = 100;
 
-	// *** STUB ****
+    // *** STUB ****
 }
 
 // Execute one instruction cycle
 //
-void one_instruction_cycle(cpu_t *cpu) {
-	// If the cpu_t isn't running, say so and return.
-	// If the pc is out of range, complain and stop running the cpu_t.
-	//
-	// *** STUB ****
+void cpu_step(cpu_t *cpu)
+{
+    // If the cpu_t isn't running, say so and return.
+    // If the pc is out of range, complain and stop running the cpu_t.
+    //
+    // *** STUB ****
 
-	// Get instruction and increment pc
-	//
-	// For printing purposes, we'll save the location of
-	// the instruction (the pc before the increment).
-	//
-	int instr_loc = cpu -> pc;
-	cpu -> ir = cpu -> mem[cpu -> pc];
-	(cpu -> pc)++;
+    // Get instruction and increment pc
+    //
+    // For printing purposes, we'll save the location of
+    // the instruction (the pc before the increment).
+    //
+    int instr_loc = cpu->pc;
+    cpu->ir = cpu->mem[cpu->pc];
+    (cpu->pc)++;
 
-	// Decode instruction into opcode, reg_R, addr_MM, and instruction sign
-	//
-	// *** STUB ****
+    // Decode instruction into opcode, reg_R, addr_MM, and instruction sign
+    //
+    // *** STUB ****
 
-	// Echo instruction
-	// *** STUB ***
+    // Echo instruction
+    // *** STUB ***
 
-	switch (cpu -> opcode) {
-	case 0:
-        cpu_halt(cpu); break;
-	// *** STUB ****
-	default: printf("Bad opcode!? %d\n", cpu -> opcode);
-	}
+    switch (cpu->opcode) {
+        case 0:
+            cpu_halt(cpu);
+            break;
+            // *** STUB ****
+        default:
+            printf("Bad opcode!? %d\n", cpu->opcode);
+    }
 }
 
 // Execute the halt instruction (make cpu_t stop running)
 //
-void cpu_halt(cpu_t *cpu) {
-	// *** STUB *** Print a message?
-	cpu->is_running = 0;
+void cpu_halt(cpu_t *cpu)
+{
+    // *** STUB *** Print a message?
+    cpu->is_running = 0;
 }
