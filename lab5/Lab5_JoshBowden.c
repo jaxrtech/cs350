@@ -90,10 +90,10 @@ void cpu_dump(cpu_t *cpu);
 void cpu_dump_memory(cpu_t *cpu);
 void cpu_dump_registers(cpu_t *cpu);
 
-void mem_check(word_t instr);
+void mem_check(word_t mem);
 int8_t mem_get_sign(word_t mem);
 opcode_t mem_get_opcode(word_t mem);
-instr_t mem_read_instr(word_t mem);
+instr_t instr_from_mem(word_t mem);
 void mem_print_instr(word_t mem);
 
 char* opcode_get_mnemonic(opcode_t opcode);
@@ -215,7 +215,7 @@ void cpu_load_from_file(cpu_t *cpu, FILE *input_file)
 // Prints a placeholder message to indicate that memory locations where skipped
 // since they were values of zero. The message is only shown when
 // `skip_count` > 0.
-void cpu_dump_memory_print_skips(uint32_t skip_count)
+void _cpu_dump_memory_print_skips(uint32_t skip_count)
 {
     if (skip_count > 0) {
         printf("| ~~~ |  ~~~~~   (skipped %d empty memory locations)\n", skip_count);
@@ -242,7 +242,7 @@ void cpu_dump_memory(cpu_t *cpu)
         }
 
         if (skip_count > 0) {
-            cpu_dump_memory_print_skips(skip_count);
+            _cpu_dump_memory_print_skips(skip_count);
             skip_count = 0;
         }
 
@@ -251,7 +251,7 @@ void cpu_dump_memory(cpu_t *cpu)
         printf("\n");
     }
 
-    cpu_dump_memory_print_skips(skip_count);
+    _cpu_dump_memory_print_skips(skip_count);
 }
 
 
@@ -322,7 +322,7 @@ opcode_t mem_get_opcode(word_t mem)
 }
 
 // Interprets the memory value `mem` as an SDC instruction.
-instr_t mem_read_instr(word_t mem)
+instr_t instr_from_mem(word_t mem)
 {
     instr_t instr;
 
@@ -419,7 +419,7 @@ instr_fields_t opcode_get_fields(opcode_t opcode)
 // Interprets a memory value as an instruction and prints its mnemonic form.
 void mem_print_instr(word_t mem)
 {
-    const instr_t instr = mem_read_instr(mem);
+    const instr_t instr = instr_from_mem(mem);
     const char *mnemonic = opcode_get_mnemonic(instr.opcode);
     printf("%-4s", mnemonic);
 

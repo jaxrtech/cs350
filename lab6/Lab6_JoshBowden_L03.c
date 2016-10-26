@@ -24,19 +24,6 @@ typedef uint8_t address_t;
 // Number of general purpose registers on the SDC
 #define CPU_NUM_REGISTERS 10
 
-// A representation of the state of an SDC cpu_t and its memory.
-typedef struct {
-    word_t mem[CPU_MEMORY_LENGTH];
-    word_t reg[CPU_NUM_REGISTERS];      // Note: "register" is a reserved word
-    address_t pc;        // Program Counter
-    bool is_running;     // is_running = 1 iff cpu_t is executing instructions
-    word_t ir;           // Instruction Register
-    int instr_sign;      //   sign of instruction
-    int opcode;          //   opcode field
-    int reg_R;           //   register field
-    int addr_MM;         //   memory field
-} cpu_t;
-
 // An SDC instruction opcode.
 //
 // Note: Due to the way the program is structured, opcodes that ignore the
@@ -45,17 +32,12 @@ typedef enum {
     OPCODE_HALT = INT8_C(0),
     OPCODE_LD = INT8_C(1),
     OPCODE_ST = INT8_C(2),
-    OPCODE_NST = INT8_C(-2),
     OPCODE_ADD = INT8_C(3),
-    OPCODE_SUB = INT8_C(-3),
     OPCODE_NEG = INT8_C(4),
     OPCODE_LDM = INT8_C(5),
-    OPCODE_NLDM = INT8_C(-5),
     OPCODE_ADDM = INT8_C(6),
-    OPCODE_SUBM = INT8_C(-6),
     OPCODE_BR = INT8_C(7),
-    OPCODE_BRGE = INT8_C(+8),
-    OPCODE_BRLE = INT8_C(-8),
+    OPCODE_BRC = INT8_C(8),
     OPCODE_GETC = INT8_C(90),
     OPCODE_OUT = INT8_C(91),
     OPCODE_PUTS = INT8_C(92),
@@ -68,62 +50,87 @@ typedef enum {
 typedef struct {
     int8_t sign;
     opcode_t opcode;
-    uint8_t reg;
-    int8_t mem;
+    uint8_t r;
+    int8_t mm;
 } instr_t;
+
+
+// Empty instruction
+const instr_t EMPTY_INSTR = {
+    .sign = +1,
+    .opcode = OPCODE_HALT,
+    .r = 0,
+    .mm = 0
+};
+
+
+// A representation of the state of an SDC cpu_t and its memory.
+typedef struct {
+    word_t mem[CPU_MEMORY_LENGTH];
+    word_t reg[CPU_NUM_REGISTERS];      // Note: "register" is a reserved word
+    address_t pc;        // Program Counter
+    bool is_running;     // is_running = 1 iff cpu_t is executing instructions
+    word_t ir;           // Instruction Register
+    instr_t instr;       // instruction
+} cpu_t;
 
 
 // A bitmask enum indicating the fields that an instruction supports.
 typedef enum {
-    INSTR_FIELD_NONE = 0,
-    INSTR_FIELD_MEM = 1 << 0,
-    INSTR_FIELD_REG = 1 << 1,
-    INSTR_FIELD_ALL = INSTR_FIELD_MEM | INSTR_FIELD_REG
+    INSTR_FIELD_NONE         = 0,
+    INSTR_FIELD_DISPLAY_SIGN = 1 << 0,
+    INSTR_FIELD_MEM          = 1 << 1,
+    INSTR_FIELD_REG          = 1 << 2,
+
+    INSTR_FIELD_ALL  =
+        INSTR_FIELD_MEM | INSTR_FIELD_REG,
+
+    INSTR_FIELD_ALL_DISPLAY_SIGN =
+        INSTR_FIELD_ALL | INSTR_FIELD_DISPLAY_SIGN,
 } instr_fields_t;
 
 
 int main(int argc, char *argv[]);
 
 FILE *open_input_file(int argc, char **argv);
+int8_t sign(const int32_t x);
 
 void cpu_init(cpu_t *cpu);
 void cpu_load_from_file(cpu_t *cpu, FILE *input_file);
 void cpu_dump(cpu_t *cpu);
 void cpu_dump_memory(cpu_t *cpu);
 void cpu_dump_registers(cpu_t *cpu);
+bool cpu_execute_command(cpu_t *cpu, const char cmd_char);
 
-void mem_check(word_t instr);
-int8_t mem_get_sign(word_t mem);
+void mem_check(word_t mem);
 opcode_t mem_get_opcode(word_t mem);
-instr_t mem_read_instr(word_t mem);
-void mem_print_instr(word_t mem);
+void mem_print(const word_t mem);
+void mem_println_with_addr(const word_t mem, const address_t address);
 
-char *opcode_get_mnemonic(opcode_t opcode);
-
+instr_t instr_from_mem(word_t mem);
+char *instr_get_mnemonic(const instr_t instr);
 uint8_t instr_fields_get_length(instr_fields_t fields);
+void instr_print(instr_t instr);
 
 bool command_read_execute(cpu_t *cpu);
 
-bool cpu_execute_command(cpu_t *cpu, const char cmd_char);
 
 void print_invalid_command(void);
 void print_help(void);
 
-void cpu_step_n(cpu_t *cpu, int num_cycles);
+void cpu_step_n(cpu_t *cpu, const int32_t num_cycles);
 void cpu_step(cpu_t *cpu);
 void cpu_halt(cpu_t *cpu);
 
-
 //
 //
-
 
 int main(int argc, char *argv[])
 {
     printf("SDC Simulator - Part 2\n");
     printf("CS 350 Lab 6\n");
     printf("Josh Bowden - Section L03\n");
-    printf("~~~\n\n");
+    printf("~~~\n");
 
     FILE *input_file = open_input_file(argc, argv);
 
@@ -133,15 +140,17 @@ int main(int argc, char *argv[])
     fclose(input_file);
 
     cpu_dump(cpu);
+    printf("\nRunning CPU... Type h for help\n");
 
-    char *prompt = "> ";
-    printf("\nBeginning execution; type h for help\n%s", prompt);
-
-    bool is_done;
+    const char *prompt = "> ";
+    bool will_continue;
     do {
         printf("%s", prompt);
-        is_done = command_read_execute(cpu);
-    } while (!is_done);
+        will_continue = command_read_execute(cpu);
+        if (will_continue) {
+            printf("\n");
+        }
+    } while (will_continue);
 
     return 0;
 }
@@ -178,12 +187,9 @@ void cpu_init(cpu_t *cpu)
     memset(cpu->mem, 0, CPU_MEMORY_LENGTH * sizeof(word_t));
 
     cpu->pc = 0;
-    cpu->instr_sign = +1;
     cpu->is_running = true;
     cpu->ir = 0;
-    cpu->opcode = 0;
-    cpu->reg_R = 0;
-    cpu->addr_MM = 0;
+    cpu->instr = EMPTY_INSTR;
 }
 
 // Loads the cpu_t's memory from a file with a list of memory values.
@@ -230,7 +236,7 @@ void cpu_load_from_file(cpu_t *cpu, FILE *input_file)
 // Prints a placeholder message to indicate that memory locations where skipped
 // since they were values of zero. The message is only shown when
 // `skip_count` > 0.
-void cpu_dump_memory_print_skips(uint32_t skip_count)
+void _cpu_dump_memory_print_skips(uint32_t skip_count)
 {
     if (skip_count > 0) {
         printf("| ~~~ |  ~~~~~   (skipped %d empty memory locations)\n",
@@ -238,6 +244,20 @@ void cpu_dump_memory_print_skips(uint32_t skip_count)
     }
 }
 
+// Interprets a memory value as an instruction and prints it in mnemonic form
+void mem_print(const word_t mem)
+{
+    instr_print(instr_from_mem(mem));
+}
+
+// Interprets a memory value as an instruction and prints it in formatted
+// mnemonic form next to its address
+void mem_println_with_addr(const word_t mem, const address_t address)
+{
+    printf("| %3d |  % 05d   ", address, mem);
+    mem_print(mem);
+    printf("\n");
+}
 
 // cpu_dump_memory(cpu_t *cpu): For each memory address that
 // contains a non-zero value, print out a line with the
@@ -249,7 +269,7 @@ void cpu_dump_memory(cpu_t *cpu)
     printf("| Loc |  Value   Instruction \n");
 
     uint32_t skip_count = 0;
-    for (int i = 0; i < CPU_MEMORY_LENGTH; i++) {
+    for (address_t i = 0; i < CPU_MEMORY_LENGTH; i++) {
         word_t mem = cpu->mem[i];
 
         if (mem == 0) {
@@ -258,26 +278,23 @@ void cpu_dump_memory(cpu_t *cpu)
         }
 
         if (skip_count > 0) {
-            cpu_dump_memory_print_skips(skip_count);
+            _cpu_dump_memory_print_skips(skip_count);
             skip_count = 0;
         }
 
-        printf("| %3d |  % 05d   ", i, mem);
-        mem_print_instr(mem);
-        printf("\n");
+        mem_println_with_addr(mem, i);
     }
 
-    cpu_dump_memory_print_skips(skip_count);
+    _cpu_dump_memory_print_skips(skip_count);
 }
-
 
 // Prints the current state of the cpu_t including its registers and memory
 void cpu_dump(cpu_t *cpu)
 {
     cpu_dump_registers(cpu);
+    printf("\n");
     cpu_dump_memory(cpu);
 }
-
 
 // Prints the current value of each register
 void cpu_dump_registers(cpu_t *cpu)
@@ -300,58 +317,54 @@ void cpu_dump_registers(cpu_t *cpu)
             printf("  ");
         }
     }
-
-    printf("\n");
 }
 
 // Checks that the memory value is within the valid range from -9999 to 9999.
-void mem_check(word_t instr)
+void mem_check(word_t mem)
 {
-    if (instr < -9999 || instr > 9999) {
-        printf("error: invalid instruction '%d'\n", instr);
+    if (mem < -9999 || mem > 9999) {
+        printf("error: invalid instruction '%d'\n", mem);
         exit(EXIT_FAILURE);
     }
 }
 
-// Gets the positive or negative sign from a memory value.
-// Returns (+/-) 1 as the sign or 0 when the original `mem` value was zero.
-int8_t mem_get_sign(word_t mem)
+// Gets the positive or negative sign of a signed integer.
+// Returns (+/-) 1 as the sign.
+int8_t sign(const int32_t x)
 {
-    if (mem > 0) return 1;
-    if (mem < 0) return -1;
-    return 0;
+    if (x >= 0) return 1;
+    else return -1;
 }
 
 // Gets the opcode a memory value represents as an SDC instruction.
 opcode_t mem_get_opcode(word_t mem)
 {
     mem_check(mem);
-    const int32_t sign = mem_get_sign(mem);
 
     const uint32_t ax = (uint32_t) (abs(mem) / 1000);
     const uint32_t ar = (uint32_t) (abs(mem) % 1000);
     if (ax >= 0 && ax <= 8) {
-        return (opcode_t) (sign * ax);
+        return (opcode_t) (ax);
     }
 
     const uint32_t bx = ar / 100;
-    return (opcode_t) (sign * ((10 * ax) + bx));
+    return (opcode_t) ((10 * ax) + bx);
 }
 
 // Interprets the memory value `mem` as an SDC instruction.
-instr_t mem_read_instr(word_t mem)
+instr_t instr_from_mem(word_t mem)
 {
     instr_t instr;
 
-    instr.sign = mem_get_sign(mem);
+    instr.sign = sign(mem);
     instr.opcode = mem_get_opcode(mem);
     if (abs(instr.opcode) >= 90) {
-        instr.reg = 0;
+        instr.r = 0;
     } else {
-        instr.reg = (uint8_t) ((abs(mem) / 100) % 10);
+        instr.r = (uint8_t) ((abs(mem) / 100) % 10);
     }
 
-    instr.mem = (uint8_t) (mem % 100);
+    instr.mm = (uint8_t) abs(mem % 100);
 
     return instr;
 }
@@ -359,42 +372,51 @@ instr_t mem_read_instr(word_t mem)
 // Gets the number of fields that an instruction field bitmap has.
 uint8_t instr_fields_get_length(instr_fields_t fields)
 {
-    switch (fields) {
-        case INSTR_FIELD_NONE:
-            return 0;
-
-        case INSTR_FIELD_REG:
-            return 1;
-
-        case INSTR_FIELD_MEM:
-            return 1;
-
-        case INSTR_FIELD_MEM | INSTR_FIELD_REG:
-            return 2;
-
-        default:
-            return 0;
+    uint8_t n = 0;
+    if (fields & INSTR_FIELD_REG) {
+        n += 1;
     }
+    if (fields & INSTR_FIELD_MEM) {
+        n += 1;
+    }
+
+    return n;
 }
 
 // Get the human-readable mnemonic for an opcode.
-char *opcode_get_mnemonic(opcode_t opcode)
+char *instr_get_mnemonic(const instr_t instr)
 {
-    switch (opcode) {
+    const int8_t sign = instr.sign;
+    switch (instr.opcode) {
         case OPCODE_HALT: return "HALT";
         case OPCODE_LD:   return "LD";
         case OPCODE_ST:   return "ST";
-        case OPCODE_NST:  return "ST";
-        case OPCODE_ADD:  return "ADD";
-        case OPCODE_SUB:  return "SUB";
+        case OPCODE_ADD:
+            if (sign >= 0) {
+                return "ADD";
+            } else {
+                return "SUB";
+            }
+
         case OPCODE_NEG:  return "NEG";
         case OPCODE_LDM:  return "LDM";
-        case OPCODE_NLDM: return "LDM";
-        case OPCODE_ADDM: return "ADDM";
-        case OPCODE_SUBM: return "SUBM";
-        case OPCODE_BR:   return "BR";
-        case OPCODE_BRGE: return "BRGE";
-        case OPCODE_BRLE: return "BRLE";
+        case OPCODE_ADDM:
+            if (sign >= 0) {
+                return "ADDM";
+            } else {
+                return "SUBM";
+            }
+
+        case OPCODE_BR:
+            return "BR";
+
+        case OPCODE_BRC:
+            if (sign >= 0) {
+                return "BRGE";
+            } else {
+                return "BRLE";
+            }
+
         case OPCODE_GETC: return "GETC";
         case OPCODE_OUT:  return "OUT";
         case OPCODE_PUTS: return "PUTS";
@@ -413,19 +435,14 @@ instr_fields_t opcode_get_fields(opcode_t opcode)
         case OPCODE_HALT: return INSTR_FIELD_NONE;
         case OPCODE_LD:   return INSTR_FIELD_ALL;
         case OPCODE_ST:   return INSTR_FIELD_ALL;
-        case OPCODE_NST:  return INSTR_FIELD_ALL;
-        case OPCODE_ADD:  return INSTR_FIELD_ALL;
-        case OPCODE_SUB:  return INSTR_FIELD_ALL;
+        case OPCODE_ADD:  return INSTR_FIELD_ALL; // -ADD displayed as SUB
         case OPCODE_NEG:  return INSTR_FIELD_REG;
-        case OPCODE_LDM:  return INSTR_FIELD_ALL;
-        case OPCODE_NLDM: return INSTR_FIELD_ALL;
-        case OPCODE_ADDM: return INSTR_FIELD_ALL;
-        case OPCODE_SUBM: return INSTR_FIELD_ALL;
+        case OPCODE_LDM:  return INSTR_FIELD_ALL_DISPLAY_SIGN;
+        case OPCODE_ADDM: return INSTR_FIELD_ALL; // -ADDM displayed as SUBM
         case OPCODE_BR:   return INSTR_FIELD_MEM;
-        case OPCODE_BRGE: return INSTR_FIELD_ALL;
-        case OPCODE_BRLE: return INSTR_FIELD_ALL;
-        case OPCODE_GETC: return INSTR_FIELD_MEM;
-        case OPCODE_OUT:  return INSTR_FIELD_MEM;
+        case OPCODE_BRC:  return INSTR_FIELD_ALL;
+        case OPCODE_GETC: return INSTR_FIELD_NONE;
+        case OPCODE_OUT:  return INSTR_FIELD_NONE;
         case OPCODE_PUTS: return INSTR_FIELD_MEM;
         case OPCODE_DMP:  return INSTR_FIELD_NONE;
         case OPCODE_MEM:  return INSTR_FIELD_NONE;
@@ -433,11 +450,10 @@ instr_fields_t opcode_get_fields(opcode_t opcode)
     }
 }
 
-// Interprets a memory value as an instruction and prints its mnemonic form.
-void mem_print_instr(word_t mem)
+// Prints its mnemonic form.
+void instr_print(instr_t instr)
 {
-    const instr_t instr = mem_read_instr(mem);
-    const char *mnemonic = opcode_get_mnemonic(instr.opcode);
+    const char *mnemonic = instr_get_mnemonic(instr);
     printf("%-4s", mnemonic);
 
     const instr_fields_t fields = opcode_get_fields(instr.opcode);
@@ -446,7 +462,7 @@ void mem_print_instr(word_t mem)
         printf(" ");
 
         if (fields & INSTR_FIELD_REG) {
-            printf(" R%d", instr.reg);
+            printf(" R%d", instr.r);
         }
 
         if (fields & INSTR_FIELD_MEM) {
@@ -454,13 +470,9 @@ void mem_print_instr(word_t mem)
                 printf(", ");
             }
 
-            int32_t val = instr.mem;
+            int32_t val = instr.mm;
 
-            // All but the `ST` and `-LDM` need to have the sign for the
-            // effective MM value applied to them
-            if (instr.opcode != OPCODE_ST
-                && instr.opcode != OPCODE_NLDM) {
-
+            if (fields & INSTR_FIELD_DISPLAY_SIGN) {
                 val *= instr.sign;
             }
 
@@ -485,32 +497,39 @@ bool command_read_execute(cpu_t *cpu)
         return false;
     }
 
-    char c = line[0];
-    if (!isdigit(c)) {
-        return cpu_execute_command(cpu, c);
-    } else {
-        int n;
-        int matches = sscanf(line, "%d", &n);
-        if (matches != 1) {
-            print_invalid_command();
-            return true;
-        }
+    int matches;
+    char c;
+    matches = sscanf(line, "%c", &c);
 
-        cpu_step_n(cpu, n);
+    int n;
+    int matches = sscanf(line, "%d", &n);
+    if (matches != 1) {
+        print_invalid_command();
         return true;
     }
+
+    cpu_step_n(cpu, n);
+        return true;
+
+    char c = line[0];
+    if (!isdigit((int) c)) {
+        return cpu_execute_command(cpu, c);
+    } else
 }
 
 // Execute a nonnumeric command; complain if it's not 'h', '?',
 // 'd', 'q' or '\n'.
 // Return true if the execution should continue, false otherwise.
 //
-bool cpu_execute_command(cpu_t *cpu, const char c)
+bool cpu_execute_command(cpu_t *cpu, const char c, bool *will_continue)
 {
+    bool is_valid = true;
+
     switch (c) {
         case 'q':
             printf("info: entered quit command. exiting...\n");
-            return false;
+            *will_continue = false;
+            return true;
 
         case 'h':
         case '?':
@@ -521,8 +540,17 @@ bool cpu_execute_command(cpu_t *cpu, const char c)
             cpu_dump(cpu);
             return true;
 
+        case 'r':
+            cpu_dump_registers(cpu);
+            return true;
+
+        case 'm':
+            cpu_dump_memory(cpu);
+            return true;
+
         case '\n':
-            cpu_step(cpu);
+            printf("info: stepping 1 cycle\n");
+            cpu_step_n(cpu, 1);
             return true;
 
         default:
@@ -543,12 +571,13 @@ void print_invalid_command(void)
 void print_help(void)
 {
     printf(
-        "h    print out this help message\n"
-        "?    print out this help message\n"
-        "d    dump CPU and memory\n"
-        "\\n  execute 1 instruction cycle\n"
-        "1..n  execute N instructions cycles\n"
-        "\n"
+        "      h   print out this help message\n"
+        "      ?   print out this help message\n"
+        "      d   dump cpu registers and memory\n"
+        "      r   dump cpu registers\n"
+        "      m   dump cpu memory\n"
+        "<enter>   execute 1 instruction cycle\n"
+        "   1..n   execute N instructions cycles\n"
     );
 }
 
@@ -560,45 +589,130 @@ void print_help(void)
 // If, as we execute the many cycles, the cpu_t stops running,
 // stop and return.
 //
-void cpu_step_n(cpu_t *cpu, int num_cycles)
+void cpu_step_n(cpu_t *cpu, const int32_t num_cycles)
 {
-    int INSANE_NBR_CYCLES = 100;
+    if (num_cycles <= 0) {
+        printf("error: number of cycles must be > 0\n");
+        return;
+    }
 
-    // *** STUB ****
+    printf("info: stepping %d cycles\n", num_cycles);
+
+    const int max_cycles = 100;
+    if (num_cycles > max_cycles) {
+        printf("warn: number of cycles too large. defaulting to %d cycles.", max_cycles);
+    }
+
+    if (!cpu->is_running) {
+        printf("info: cpu has halted. ignoring...\n");
+        return;
+    }
+
+    for (int32_t n = num_cycles; n > 0; n--) {
+        cpu_step(cpu);
+        if (!cpu->is_running) return;
+    }
 }
 
 // Execute one instruction cycle
 //
 void cpu_step(cpu_t *cpu)
 {
-    // If the cpu_t isn't running, say so and return.
-    // If the pc is out of range, complain and stop running the cpu_t.
-    //
-    // *** STUB ****
+    if (!cpu->is_running) {
+        printf("info: cpu has halted. ignoring...\n");
+        return;
+    }
 
-    // Get instruction and increment pc
-    //
-    // For printing purposes, we'll save the location of
-    // the instruction (the pc before the increment).
-    //
-    int instr_loc = cpu->pc;
+    if (cpu->pc < 0 || cpu->pc > 99) {
+        printf("error: pc is out of range. halting execution...");
+        cpu_halt(cpu);
+        return;
+    }
+
+    const address_t addr = cpu->pc;
     cpu->ir = cpu->mem[cpu->pc];
     (cpu->pc)++;
 
-    // Decode instruction into opcode, reg_R, addr_MM, and instruction sign
-    //
-    // *** STUB ****
+    const instr_t instr = instr_from_mem(cpu->ir);
+    cpu->instr = instr;
 
-    // Echo instruction
-    // *** STUB ***
+    mem_println_with_addr(cpu->ir, addr);
 
-    switch (cpu->opcode) {
-        case 0:
+    switch ((cpu->instr).opcode) {
+        case OPCODE_HALT:
             cpu_halt(cpu);
             break;
-            // *** STUB ****
+
+        case OPCODE_LD:
+            cpu->reg[instr.r] = cpu->mem[instr.mm];
+            break;
+
+        case OPCODE_ST:
+            cpu->mem[instr.mm] = cpu->reg[instr.r];
+            break;
+
+        case OPCODE_ADD:
+            cpu->reg[instr.r] += instr.sign * cpu->mem[instr.mm];
+            break;
+
+        case OPCODE_NEG:
+            cpu->reg[instr.r] *= -1;
+            break;
+
+        case OPCODE_LDM:
+            cpu->reg[instr.r] = instr.sign * instr.mm;
+            break;
+
+        case OPCODE_ADDM:
+            cpu->reg[instr.r] += instr.sign * instr.mm;
+            break;
+
+        case OPCODE_BR:
+            cpu->pc = (address_t) instr.mm;
+            break;
+
+        case OPCODE_BRC: {
+            const word_t reg = cpu->reg[instr.r];
+            if (reg == 0 || sign(reg) == instr.sign) {
+                cpu->pc = (address_t) instr.mm;
+            }
+            break;
+        }
+
+        case OPCODE_GETC: {
+            printf("in > ");
+            const char c = (char) getchar();
+            cpu->reg[0] = c;
+            break;
+        }
+
+        case OPCODE_OUT:
+            printf("out> %c\n", cpu->reg[0]);
+            break;
+
+        case OPCODE_PUTS: {
+            printf("out> ");
+            address_t strptr = (address_t) instr.mm;
+            while (cpu->mem[strptr] != '\0') {
+                putchar(cpu->mem[strptr]);
+                strptr++;
+            }
+            printf("\n");
+            break;
+        }
+
+        case OPCODE_DMP:
+            printf("info: dumping cpu registers and memory...\n\n");
+            cpu_dump(cpu);
+            break;
+
+        case OPCODE_MEM:
+            printf("info: dumping cpu memory...\n\n");
+            cpu_dump_memory(cpu);
+            break;
+
         default:
-            printf("Bad opcode!? %d\n", cpu->opcode);
+            printf("error: bad opcode '%d'\n", abs(instr.opcode));
     }
 }
 
@@ -606,6 +720,6 @@ void cpu_step(cpu_t *cpu)
 //
 void cpu_halt(cpu_t *cpu)
 {
-    // *** STUB *** Print a message?
+    printf("info: halting execution...\n");
     cpu->is_running = 0;
 }
