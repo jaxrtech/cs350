@@ -215,7 +215,7 @@ void cpu_load_from_file(cpu_t *cpu, FILE *input_file)
 // Prints a placeholder message to indicate that memory locations where skipped
 // since they were values of zero. The message is only shown when
 // `skip_count` > 0.
-void _cpu_dump_memory_print_skips(uint32_t skip_count)
+void cpu_dump_memory_print_skips(uint32_t skip_count)
 {
     if (skip_count > 0) {
         printf("| ~~~ |  ~~~~~   (skipped %d empty memory locations)\n", skip_count);
@@ -242,7 +242,7 @@ void cpu_dump_memory(cpu_t *cpu)
         }
 
         if (skip_count > 0) {
-            _cpu_dump_memory_print_skips(skip_count);
+            cpu_dump_memory_print_skips(skip_count);
             skip_count = 0;
         }
 
@@ -251,7 +251,7 @@ void cpu_dump_memory(cpu_t *cpu)
         printf("\n");
     }
 
-    _cpu_dump_memory_print_skips(skip_count);
+    cpu_dump_memory_print_skips(skip_count);
 }
 
 

@@ -10,7 +10,6 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
-#include <ctype.h>
 
 // A word of SDC memory
 typedef int16_t word_t;
@@ -100,7 +99,7 @@ void cpu_load_from_file(cpu_t *cpu, FILE *input_file);
 void cpu_dump(cpu_t *cpu);
 void cpu_dump_memory(cpu_t *cpu);
 void cpu_dump_registers(cpu_t *cpu);
-bool cpu_execute_command(cpu_t *cpu, const char cmd_char);
+bool cpu_execute_command(cpu_t *cpu, const char c, bool *will_continue);
 
 void mem_check(word_t mem);
 opcode_t mem_get_opcode(word_t mem);
@@ -112,7 +111,7 @@ char *instr_get_mnemonic(const instr_t instr);
 uint8_t instr_fields_get_length(instr_fields_t fields);
 void instr_print(instr_t instr);
 
-bool command_read_execute(cpu_t *cpu);
+bool read_command_execute(cpu_t *cpu);
 
 
 void print_invalid_command(void);
@@ -146,7 +145,7 @@ int main(int argc, char *argv[])
     bool will_continue;
     do {
         printf("%s", prompt);
-        will_continue = command_read_execute(cpu);
+        will_continue = read_command_execute(cpu);
         if (will_continue) {
             printf("\n");
         }
@@ -236,7 +235,7 @@ void cpu_load_from_file(cpu_t *cpu, FILE *input_file)
 // Prints a placeholder message to indicate that memory locations where skipped
 // since they were values of zero. The message is only shown when
 // `skip_count` > 0.
-void _cpu_dump_memory_print_skips(uint32_t skip_count)
+void cpu_dump_memory_print_skips(uint32_t skip_count)
 {
     if (skip_count > 0) {
         printf("| ~~~ |  ~~~~~   (skipped %d empty memory locations)\n",
@@ -278,14 +277,14 @@ void cpu_dump_memory(cpu_t *cpu)
         }
 
         if (skip_count > 0) {
-            _cpu_dump_memory_print_skips(skip_count);
+            cpu_dump_memory_print_skips(skip_count);
             skip_count = 0;
         }
 
         mem_println_with_addr(mem, i);
     }
 
-    _cpu_dump_memory_print_skips(skip_count);
+    cpu_dump_memory_print_skips(skip_count);
 }
 
 // Prints the current state of the cpu_t including its registers and memory
@@ -485,7 +484,7 @@ void instr_print(instr_t instr)
 // or empty line) and execute it.
 // Return true if the execution should continue, false otherwise.
 //
-bool command_read_execute(cpu_t *cpu)
+bool read_command_execute(cpu_t *cpu)
 {
     // Buffer to read next command line into
 #define LINE_BUF_LEN 80
@@ -500,63 +499,82 @@ bool command_read_execute(cpu_t *cpu)
     int matches;
     char c;
     matches = sscanf(line, "%c", &c);
+    if (matches == 1) {
+        bool will_continue = true;
+        if (cpu_execute_command(cpu, c, &will_continue)) {
+            return will_continue;
+        }
+    }
 
     int n;
-    int matches = sscanf(line, "%d", &n);
-    if (matches != 1) {
-        print_invalid_command();
+    matches = sscanf(line, "%d", &n);
+    if (matches == 1) {
+        cpu_step_n(cpu, n);
         return true;
     }
 
-    cpu_step_n(cpu, n);
-        return true;
-
-    char c = line[0];
-    if (!isdigit((int) c)) {
-        return cpu_execute_command(cpu, c);
-    } else
+    print_invalid_command();
+    return true;
 }
 
 // Execute a nonnumeric command; complain if it's not 'h', '?',
 // 'd', 'q' or '\n'.
-// Return true if the execution should continue, false otherwise.
+//
+// Return `true` if command is valid.
+//
+// `*will_continue` is set to `true` when the cpu will continue execution,
+// other wise false
 //
 bool cpu_execute_command(cpu_t *cpu, const char c, bool *will_continue)
 {
-    bool is_valid = true;
+    bool is_valid;
 
     switch (c) {
         case 'q':
             printf("info: entered quit command. exiting...\n");
             *will_continue = false;
-            return true;
+            is_valid = true;
+            break;
 
         case 'h':
         case '?':
             print_help();
-            return true;
+            *will_continue = true;
+            is_valid = true;
+            break;
 
         case 'd':
             cpu_dump(cpu);
-            return true;
+            *will_continue = true;
+            is_valid = true;
+            break;
 
         case 'r':
             cpu_dump_registers(cpu);
-            return true;
+            *will_continue = true;
+            is_valid = true;
+            break;
 
         case 'm':
             cpu_dump_memory(cpu);
-            return true;
+            *will_continue = true;
+            is_valid = true;
+            break;
 
         case '\n':
             printf("info: stepping 1 cycle\n");
             cpu_step_n(cpu, 1);
-            return true;
+            *will_continue = true;
+            is_valid = true;
+            break;
 
         default:
-            print_invalid_command();
-            return true;
+            *will_continue = true;
+            is_valid = false;
+            break;
     }
+
+    return is_valid;
 }
 
 // Print out message saying that the command was invalid
@@ -596,15 +614,13 @@ void cpu_step_n(cpu_t *cpu, const int32_t num_cycles)
         return;
     }
 
-    printf("info: stepping %d cycles\n", num_cycles);
-
     const int max_cycles = 100;
     if (num_cycles > max_cycles) {
         printf("warn: number of cycles too large. defaulting to %d cycles.", max_cycles);
     }
 
     if (!cpu->is_running) {
-        printf("info: cpu has halted. ignoring...\n");
+        printf("info: cpu has halted. ignoring.\n");
         return;
     }
 
@@ -614,20 +630,27 @@ void cpu_step_n(cpu_t *cpu, const int32_t num_cycles)
     }
 }
 
+bool cpu_check_sanity(cpu_t *cpu)
+{
+    if (cpu->pc < 0 || cpu->pc > 99) {
+        printf("error: pc is out of range. halting execution...");
+        cpu_halt(cpu);
+        return false;
+    }
+
+    return true;
+}
+
 // Execute one instruction cycle
 //
 void cpu_step(cpu_t *cpu)
 {
     if (!cpu->is_running) {
-        printf("info: cpu has halted. ignoring...\n");
+        printf("info: cpu has halted. ignoring.\n");
         return;
     }
 
-    if (cpu->pc < 0 || cpu->pc > 99) {
-        printf("error: pc is out of range. halting execution...");
-        cpu_halt(cpu);
-        return;
-    }
+    if (!cpu_check_sanity(cpu)) return;
 
     const address_t addr = cpu->pc;
     cpu->ir = cpu->mem[cpu->pc];
@@ -712,14 +735,16 @@ void cpu_step(cpu_t *cpu)
             break;
 
         default:
-            printf("error: bad opcode '%d'\n", abs(instr.opcode));
+            printf("warn: bad opcode '%d'. ignoring.\n", abs(instr.opcode));
     }
+
+    if (!cpu_check_sanity(cpu)) return;
 }
 
 // Execute the halt instruction (make cpu_t stop running)
 //
 void cpu_halt(cpu_t *cpu)
 {
-    printf("info: halting execution...\n");
+    printf("info: halting execution\n");
     cpu->is_running = 0;
 }
