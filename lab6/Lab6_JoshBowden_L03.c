@@ -509,6 +509,7 @@ bool read_command_execute(cpu_t *cpu)
     int n;
     matches = sscanf(line, "%d", &n);
     if (matches == 1) {
+        printf("info: stepping %d cycles\n", n);
         cpu_step_n(cpu, n);
         return true;
     }
@@ -735,7 +736,7 @@ void cpu_step(cpu_t *cpu)
             break;
 
         default:
-            printf("warn: bad opcode '%d'. ignoring.\n", abs(instr.opcode));
+            printf("warn: unknown opcode '%d'. ignoring.\n", abs(instr.opcode));
     }
 
     if (!cpu_check_sanity(cpu)) return;
