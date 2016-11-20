@@ -1,6 +1,7 @@
 // CS 350, Fall 2016
 //
 // Josh Bowden & Huzair Kalia - Section L03
+// (collaborated on Phase 1 only)
 //
 // Final Project: LC-3 Simulator, Phase 1
 //
