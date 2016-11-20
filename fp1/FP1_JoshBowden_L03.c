@@ -46,10 +46,10 @@ typedef struct {
 // A word of LC-3 memory
 typedef int16_t word_t;
 
-// A word of LC-3 memory
+// An unsigned word of LC-3 memory
 typedef uint16_t uword_t;
 
-// An address to a location in SDC memory
+// An address to a location in memory
 typedef uint16_t address_t;
 
 // An instruction argument specifying the register number
@@ -229,10 +229,10 @@ const instr_t EMPTY_INSTR = {
 
 /* cpu_t declaration  */
 
-// Length of SDC memory in terms `word_t`
+// Length of memory in terms `word_t`
 #define CPU_MEMORY_LENGTH UINT16_MAX
 
-// Number of general purpose registers on the SDC
+// Number of general purpose registers
 #define CPU_NUM_REGISTERS 7
 
 // A representation of the state of an LC-3 cpu_t and its memory.
@@ -527,7 +527,7 @@ void cpu_dump_registers(cpu_t *cpu)
     }
 }
 
-// Gets the opcode a memory value represents as an SDC instruction.
+// Gets the opcode a memory value represents as an instruction.
 opcode_t instr_get_opcode(instr_t instr)
 {
     const uint8_t opcode_len = 4;
@@ -556,9 +556,9 @@ reg_format_t instr_get_format(const instr_t instr)
 
         case OPCODE_ADD:
         case OPCODE_AND: {
-            const word_t reg_2_imm_mask = 0x0020;
+            const word_t reg_2_imm_bit = 0x0020;
 
-            if ((instr.raw & reg_2_imm_mask) == reg_2_imm_mask) {
+            if ((instr.raw & reg_2_imm_bit) == reg_2_imm_bit) {
                 return REG_FORMAT_REG_2_IMM;
             } else {
                 return REG_FORMAT_REG_3;
@@ -572,9 +572,9 @@ reg_format_t instr_get_format(const instr_t instr)
             return REG_FORMAT_TRAP;
 
         case OPCODE_JSR: {
-            const word_t jsr_mask = 0x0800;
+            const word_t jsr_bit = 0x0800;
 
-            if ((instr.raw & jsr_mask) == jsr_mask) {
+            if ((instr.raw & jsr_bit) == jsr_bit) {
                 return REG_FORMAT_JSR;
             } else {
                 return REG_FORMAT_REG_1;
