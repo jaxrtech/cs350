@@ -2,7 +2,7 @@
 //
 // Josh Bowden - Section L03
 //
-// Final Project: LC-3 Simulator, Part 1
+// Final Project: LC-3 Simulator, Phase 1
 //
 
 #include <stdio.h>
@@ -11,8 +11,19 @@
 #include <stdlib.h>
 #include <stdint.h>
 
+#define BITMASK_N(N)  ((1u << (N)) - 1u)
+
+#define BITMASK_FIELD(POS, N)  (((1u << (N)) - 1u) << (POS))
+
+#define SIGN_N(X, N)  ((X) >> ((N) - 1u))
+
+#define NEGATIVE_SIGN_BIT 0x1
+
 // A word of LC-3 memory
 typedef int16_t word_t;
+
+// A word of LC-3 memory
+typedef uint16_t uword_t;
 
 // An address to a location in SDC memory
 typedef uint16_t address_t;
@@ -23,93 +34,181 @@ typedef uint16_t address_t;
 // Number of general purpose registers on the SDC
 #define CPU_NUM_REGISTERS 8
 
-typedef struct {
-    const uint16_t idx;
-    const char *mnemonic;
-    const word_t mask;
-} instr_desc_t;
+// Length of an instruction in bits
+const uint8_t instr_len = 16;
 
 // An LC-3 instruction opcode.
 typedef enum {
 
     /* PC-offset instructions */
-    OPCODE_LD   = UINT8_C(0b0010),
-    OPCODE_ST   = UINT8_C(0b0011),
-    OPCODE_LEA  = UINT8_C(0b1110),
+    OPCODE_LD   = UINT8_C(0b0010), // 2
+    OPCODE_ST   = UINT8_C(0b0011), // 3
+    OPCODE_LEA  = UINT8_C(0b1110), // 14
 
     /* base-offset instructions */
-    OPCODE_LDR  = UINT8_C(0b0110),
-    OPCODE_STR  = UINT8_C(0b0111),
+    OPCODE_LDR  = UINT8_C(0b0110), // 6
+    OPCODE_STR  = UINT8_C(0b0111), // 7
 
     /* indirect instructions */
-    OPCODE_LDI  = UINT8_C(0b1010),
-    OPCODE_STI  = UINT8_C(0b1011),
+    OPCODE_LDI  = UINT8_C(0b1010), // 10
+    OPCODE_STI  = UINT8_C(0b1011), // 11
 
     /* arithmetic instructions */
-    OPCODE_NOT  = UINT8_C(0b1001),
-    OPCODE_ADD  = UINT8_C(0b0001),
-    OPCODE_AND  = UINT8_C(0b0101),
+    OPCODE_NOT  = UINT8_C(0b1001), // 9
+    OPCODE_ADD  = UINT8_C(0b0001), // 1
+    OPCODE_AND  = UINT8_C(0b0101), // 5
 
     /* branch instructions */
-    OPCODE_BR   = UINT8_C(0b0000),
-    OPCODE_TRAP = UINT8_C(0b1111),
-    OPCODE_JSR  = UINT8_C(0b0100),
-    OPCODE_JSRR = UINT8_C(0b0100),
-    OPCODE_RET  = UINT8_C(0b1100),
+    OPCODE_BR   = UINT8_C(0b0000), // 0
+    OPCODE_TRAP = UINT8_C(0b1111), // 15
+    OPCODE_JSR  = UINT8_C(0b0100), // 4
+    OPCODE_RET  = UINT8_C(0b1100), // 12
 
 } opcode_t;
+
+// The trap vectors for the LC-3
+typedef enum {
+    TRAP_GETC  = UINT8_C(0x20),
+    TRAP_OUT   = UINT8_C(0x21),
+    TRAP_PUTS  = UINT8_C(0x22),
+    TRAP_IN    = UINT8_C(0x23),
+    TRAP_HALT  = UINT8_C(0x23),
+    TRAP_PUTSP = UINT8_C(0x20)
+} trap_vector_t;
+
+typedef uint8_t reg3_t;
+
+typedef int8_t offset6_t;
+
+typedef int16_t offset9_t;
+
+typedef int16_t offset11_t;
+
+typedef uint8_t uint5_t;
+
+// A flag enum for the branch condition codes
+typedef enum {
+    CC_NONE     = 0,
+    CC_POSITIVE = 1 << 0,
+    CC_ZERO     = 1 << 1,
+    CC_NEGATIVE = 1 << 2,
+    CC_ALL = CC_NEGATIVE | CC_POSITIVE | CC_ZERO
+} condition_code_t;
+
+
+typedef struct {
+    reg3_t rn;
+    offset9_t offset;
+} reg_pc_offset_t;
+
+typedef struct {
+    reg3_t rn;
+    reg3_t rb;
+    offset6_t offset;
+} reg_base_offset_t;
+
+typedef struct {
+    reg3_t rn;
+    reg3_t ra;
+    // ignored - 6 bits
+} reg_2_t;
+
+typedef struct {
+    reg3_t rn;
+    reg3_t ra;
+    // ignored - 1 bit
+    uint5_t imm;
+} reg_2_imm_t;
+
+typedef struct {
+    reg3_t rc;
+    reg3_t ra;
+    // ignored - 3 bits
+    reg3_t rb;
+} reg_3_t;
+
+typedef struct {
+    condition_code_t cc; // 3 bits
+    offset9_t pc_offset; // 9 bits
+} reg_br_t;
+
+typedef struct {
+    // ignored - 4 bits
+    trap_vector_t vector; // 8 bits
+} reg_trap_t;
+
+typedef struct {
+    // ignored - 1 bit
+    offset11_t pc_offset;
+} reg_jsr_t;
+
+typedef struct {
+    // ignored - 3 bits
+    reg3_t rq;
+    // ignored - 6 bits
+} reg_jsrr_t;
+
+typedef uint8_t reg_no_args_t;
+
+
+typedef union {
+    reg_no_args_t invalid; // 12 bits
+    reg_pc_offset_t pc_offset;
+    reg_base_offset_t base_offset;
+    reg_2_t reg_2;
+    reg_2_imm_t reg_2_imm;
+    reg_3_t reg_3;
+    reg_br_t br;
+    reg_trap_t trap;
+    reg_jsr_t jsr;
+    reg_jsrr_t jsrr;
+    reg_no_args_t no_args;
+} reg_args_t;
+
+
+typedef enum {
+    REG_FORMAT_UKNOWN,
+    REG_FORMAT_PC_OFFSET,
+    REG_FORMAT_BASE_OFFSET,
+    REG_FORMAT_REG_2,
+    REG_FORMAT_REG_2_IMM,
+    REG_FORMAT_REG_3,
+    REG_FORMAT_BR,
+    REG_FORMAT_TRAP,
+    REG_FORMAT_JSR,
+    REG_FORMAT_JSRR,
+    REG_FORMAT_NO_ARGS,
+} reg_format_t;
 
 
 // An interpreted instruction.
 typedef struct {
-    uint16_t tag;
-    uint8_t opcode : 4;
-    union data {
-        struct pc_offset {
-            uint8_t rn : 3;
-            uint16_t dpc : 9;
-        };
-
-        struct base_offset {
-            uint8_t rn : 3;
-            uint8_t rb : 3;
-            uint8_t dbo : 6;
-        };
-
-        struct not {
-            uint8_t rn : 3;
-            uint8_t ra : 3;
-            uint8_t rb : 3;
-        };
-
-        struct reg_offset {
-            uint8_t rn : 3;
-            uint8_t ra : 3;
-            uint8_t rb : 3;
-        };
-
-        struct
-    };
+    word_t raw;
+    char *mnemonic;
+    uint8_t opcode; // 4 bits
+    reg_format_t format;
+    reg_args_t args;
 } instr_t;
 
 
 // Empty instruction
 const instr_t EMPTY_INSTR = {
-    .sign = +1,
-    .opcode = (opcode_t) 0 ,
-    .r = 0,
-    .mm = 0
+    .raw = (uint16_t) 0,
+    .opcode = 0,
+    .format = REG_FORMAT_UKNOWN,
+    .args.invalid = 0,
 };
 
+typedef struct {
+    /* Position of the field in the instr in bits */
+    uint8_t pos;
 
-// A flag enum for the branch condition codes
-typedef enum {
-    CONDITION_CODE_NONE     = 0,
-    CONDITION_CODE_NEGATIVE = 1 << 0,
-    CONDITION_CODE_ZERO     = 1 << 1,
-    CONDITION_CODE_POSITIVE = 1 << 2,
-} condition_code_t;
+    /* Length of the field in the instr in bits */
+    uint8_t len;
 
+    /* Mask of the field in the instr */
+    uint16_t mask;
+} bitfield_t;
 
 // A representation of the state of an LC-3 cpu_t and its memory.
 typedef struct {
@@ -122,51 +221,51 @@ typedef struct {
 } cpu_t;
 
 
-// A bitmask enum indicating the fields that an instruction supports.
-typedef enum {
-    INSTR_FIELD_NONE         = 0,
-    INSTR_FIELD_DISPLAY_SIGN = 1 << 0,
-    INSTR_FIELD_MEM          = 1 << 1,
-    INSTR_FIELD_REG          = 1 << 2,
-
-    INSTR_FIELD_ALL  =
-        INSTR_FIELD_MEM | INSTR_FIELD_REG,
-
-    INSTR_FIELD_ALL_DISPLAY_SIGN =
-        INSTR_FIELD_ALL | INSTR_FIELD_DISPLAY_SIGN,
-} instr_fields_t;
-
-
 int main(int argc, char *argv[]);
 
 FILE *open_input_file(int argc, char **argv);
+
 int8_t sign(const int32_t x);
 
 void cpu_init(cpu_t *cpu);
+
 void cpu_load_from_file(cpu_t *cpu, FILE *input_file);
+
 void cpu_dump(cpu_t *cpu);
+
 void cpu_dump_memory(cpu_t *cpu);
+
 void cpu_dump_registers(cpu_t *cpu);
+
 bool cpu_execute_command(cpu_t *cpu, const char c, bool *will_continue);
 
 void mem_check(word_t mem);
-opcode_t mem_get_opcode(word_t mem);
+
+opcode_t instr_get_opcode(instr_t instr);
+
 void mem_print(const word_t mem);
+
 void mem_println_with_addr(const word_t mem, const address_t address);
 
-instr_t instr_from_mem(word_t mem);
+instr_t instr_decode(word_t mem);
+
+reg_format_t instr_get_format(const instr_t instr);
+
 char *instr_get_mnemonic(const instr_t instr);
-uint8_t instr_fields_get_length(instr_fields_t fields);
-void instr_print(instr_t instr);
+
+void instr_print(instr_t  instr);
 
 bool read_command_execute(cpu_t *cpu);
 
 
 void print_invalid_command(void);
+
 void print_help(void);
 
 void cpu_step_n(cpu_t *cpu, const int32_t num_cycles);
+
 void cpu_step(cpu_t *cpu);
+
 void cpu_halt(cpu_t *cpu);
 
 //
@@ -206,7 +305,7 @@ int main(int argc, char *argv[])
 // The default file path is used otherwise
 FILE *open_input_file(int argc, char **argv)
 {
-#define DEFAULT_INPUT_PATH "default.sdc";
+#define DEFAULT_INPUT_PATH "default.hex";
     char *path = NULL;
 
     if (argc >= 2) {
@@ -255,28 +354,13 @@ void cpu_load_from_file(cpu_t *cpu, FILE *input_file)
         // Only care about possibly having a number at the start of the line.
         // Text after the number or blank lines are ignored.
         int32_t x;
-        int32_t n = sscanf(buffer, "%d", &x);
+        int32_t n = sscanf(buffer, "%x", &x);
         if (n <= 0) continue;
 
-        // Ensure that we do not run outside the bounds of the cpu_t's memory
-        if (i > CPU_MEMORY_LENGTH - 1) {
-            printf("error: line %d: "
-                    "reached maximum memory limit of %d words\n",
-                line, CPU_MEMORY_LENGTH);
-            break;
-        }
-
-        // Values of `x` outside of the range -9999...9999 sentinel and signal
-        // us to stop loading more lines
-        if (x < -9999 || x > 9999) {
-            printf("info: line %d: "
-                "read sentinel value outside of range -9999 and 9999. "
-                "stopped loading.\n", line);
-            break;
-        }
-
         cpu->mem[i] = (word_t) x;
-        i++;
+
+        // Wrap around memory at end
+        i = (i + 1) % UINT16_MAX;
     }
 }
 
@@ -286,22 +370,23 @@ void cpu_load_from_file(cpu_t *cpu, FILE *input_file)
 void cpu_dump_memory_print_skips(uint32_t skip_count)
 {
     if (skip_count > 0) {
-        printf("| ~~~ |  ~~~~~   (skipped %d empty memory locations)\n",
-               skip_count);
+        printf(
+            "| ~~~ |  ~~~~~   (skipped %d empty memory locations)\n",
+            skip_count);
     }
 }
 
 // Interprets a memory value as an instruction and prints it in mnemonic form
 void mem_print(const word_t mem)
 {
-    instr_print(instr_from_mem(mem));
+    instr_print(instr_decode(mem));
 }
 
 // Interprets a memory value as an instruction and prints it in formatted
 // mnemonic form next to its address
 void mem_println_with_addr(const word_t mem, const address_t address)
 {
-    printf("| %3d |  % 05d   ", address, mem);
+    printf("x%04X: ", address);
     mem_print(mem);
     printf("\n");
 }
@@ -313,7 +398,7 @@ void mem_println_with_addr(const word_t mem, const address_t address)
 //
 void cpu_dump_memory(cpu_t *cpu)
 {
-    printf("| Loc |  Value   Instruction \n");
+    printf("\n");
 
     uint32_t skip_count = 0;
     for (address_t i = 0; i < CPU_MEMORY_LENGTH; i++) {
@@ -349,9 +434,9 @@ void cpu_dump_registers(cpu_t *cpu)
     const int cols = 5;
 
     printf("PC: %6d  IR: %6d  RUNNING: %1d\n",
-           cpu->pc,
-           cpu->ir,
-           cpu->is_running);
+        cpu->pc,
+        cpu->ir,
+        cpu->is_running);
 
     for (int i = 0; i < CPU_NUM_REGISTERS; i++) {
         int x = cpu->reg[i];
@@ -366,15 +451,6 @@ void cpu_dump_registers(cpu_t *cpu)
     }
 }
 
-// Checks that the memory value is within the valid range from -9999 to 9999.
-void mem_check(word_t mem)
-{
-    if (mem < -9999 || mem > 9999) {
-        printf("error: invalid instruction '%d'\n", mem);
-        exit(EXIT_FAILURE);
-    }
-}
-
 // Gets the positive or negative sign of a signed integer.
 // Returns (+/-) 1 as the sign.
 int8_t sign(const int32_t x)
@@ -384,147 +460,336 @@ int8_t sign(const int32_t x)
 }
 
 // Gets the opcode a memory value represents as an SDC instruction.
-opcode_t mem_get_opcode(word_t mem)
+opcode_t instr_get_opcode(instr_t instr)
 {
-    mem_check(mem);
+    const uint8_t opcode_len = 4;
+    const uint16_t opcode_mask = 0xF000;
 
-    const uint32_t ax = (uint32_t) (abs(mem) / 1000);
-    const uint32_t ar = (uint32_t) (abs(mem) % 1000);
-    if (ax >= 0 && ax <= 8) {
-        return (opcode_t) (ax);
-    }
-
-    const uint32_t bx = ar / 100;
-    return (opcode_t) ((10 * ax) + bx);
+    return (opcode_t) ((instr.raw & opcode_mask) >> (instr_len - opcode_len));
 }
 
-// Interprets the memory value `mem` as an SDC instruction.
-instr_t instr_from_mem(word_t mem)
+// Get the human-readable mnemonic for an opcode.
+reg_format_t instr_get_format(const instr_t instr)
 {
-    instr_t instr;
+    switch (instr.opcode) {
+        case OPCODE_LD:
+        case OPCODE_ST:
+        case OPCODE_LDI:
+        case OPCODE_STI:
+            return REG_FORMAT_PC_OFFSET;
 
-    instr.sign = sign(mem);
-    instr.opcode = mem_get_opcode(mem);
-    if (abs(instr.opcode) >= 90) {
-        instr.r = 0;
-    } else {
-        instr.r = (uint8_t) ((abs(mem) / 100) % 10);
+        case OPCODE_LDR:
+        case OPCODE_STR:
+            return REG_FORMAT_BASE_OFFSET;
+
+        case OPCODE_NOT:
+            return REG_FORMAT_REG_2;
+
+        case OPCODE_ADD:
+        case OPCODE_AND: {
+            const word_t reg_2_imm_mask = 0x0020;
+
+            if ((instr.raw & reg_2_imm_mask) == reg_2_imm_mask) {
+                return REG_FORMAT_REG_2_IMM;
+            } else {
+                return REG_FORMAT_REG_3;
+            }
+        }
+
+        case OPCODE_BR:
+            return REG_FORMAT_BR;
+
+        case OPCODE_TRAP:
+            return REG_FORMAT_TRAP;
+
+        case OPCODE_JSR: {
+            const word_t jsr_mask = 0x0800;
+
+            if ((instr.raw & jsr_mask) == jsr_mask) {
+                return REG_FORMAT_JSR;
+            } else {
+                return REG_FORMAT_JSRR;
+            }
+        }
+
+        case OPCODE_RET:
+            return REG_FORMAT_NO_ARGS;
+
+        default:
+            return REG_FORMAT_UKNOWN;
     }
-
-    instr.mm = (uint8_t) abs(mem % 100);
-
-    return instr;
-}
-
-// Gets the number of fields that an instruction field bitmap has.
-uint8_t instr_fields_get_length(instr_fields_t fields)
-{
-    uint8_t n = 0;
-    if (fields & INSTR_FIELD_REG) {
-        n += 1;
-    }
-    if (fields & INSTR_FIELD_MEM) {
-        n += 1;
-    }
-
-    return n;
 }
 
 // Get the human-readable mnemonic for an opcode.
 char *instr_get_mnemonic(const instr_t instr)
 {
-    const int8_t sign = instr.sign;
     switch (instr.opcode) {
-        case OPCODE_HALT: return "HALT";
         case OPCODE_LD:   return "LD";
         case OPCODE_ST:   return "ST";
-        case OPCODE_ADD:
-            if (sign >= 0) {
-                return "ADD";
-            } else {
-                return "SUB";
+        case OPCODE_LEA:  return "LEA";
+        case OPCODE_LDR:  return "LDR";
+        case OPCODE_STR:  return "STR";
+        case OPCODE_LDI:  return "LDI";
+        case OPCODE_STI:  return "STI";
+        case OPCODE_NOT:  return "NOT";
+        case OPCODE_ADD:  return "ADD";
+        case OPCODE_AND:  return "AND";
+        case OPCODE_TRAP: return "TRAP";
+        case OPCODE_RET:  return "RET";
+        case OPCODE_BR: {
+            switch (instr.args.br.cc) {
+                case CC_NONE:                   return "NOP";
+                case CC_ALL:                    return "BR";
+                case CC_NEGATIVE:               return "BRN";
+                case CC_ZERO:                   return "BRZ";
+                case CC_POSITIVE:               return "BRP";
+                case CC_NEGATIVE | CC_ZERO:     return "BRNZ";
+                case CC_NEGATIVE | CC_POSITIVE: return "BRNP";
+                case CC_ZERO | CC_POSITIVE:     return "BRZP";
+                default:
+                    fprintf(
+                        stderr,
+                        "error: instr_get_mnemonic(): invalid branch cc\n");
+                    exit(1);
             }
-
-        case OPCODE_NEG:  return "NEG";
-        case OPCODE_LDM:  return "LDM";
-        case OPCODE_ADDM:
-            if (sign >= 0) {
-                return "ADDM";
-            } else {
-                return "SUBM";
+        }
+        case OPCODE_JSR: {
+            switch (instr.format) {
+                case REG_FORMAT_JSR: return "JSR";
+                case REG_FORMAT_JSRR: return "JSRR";
+                default:
+                    fprintf(
+                        stderr,
+                        "error: instr_get_mnemonic(): invalid jsr/jsrr\n");
+                    exit(1);
             }
-
-        case OPCODE_BR:
-            return "BR";
-
-        case OPCODE_BRC:
-            if (sign >= 0) {
-                return "BRGE";
-            } else {
-                return "BRLE";
-            }
-
-        case OPCODE_GETC: return "GETC";
-        case OPCODE_OUT:  return "OUT";
-        case OPCODE_PUTS: return "PUTS";
-        case OPCODE_DMP:  return "DMP";
-        case OPCODE_MEM:  return "MEM";
+        }
         default:          return "NOP";
     }
 }
 
-// Get the support fields for a given instruction.
-// Determines if an opcode uses any of the instruction fields including the
-// register number (`INSTR_FIELD_REG`) and/or MM value (`INSTR_FIELD_MEM`).
-instr_fields_t opcode_get_fields(opcode_t opcode)
+bitfield_t bitfield_create(uint8_t pos, uint8_t len)
 {
-    switch (opcode) {
-        case OPCODE_HALT: return INSTR_FIELD_NONE;
-        case OPCODE_LD:   return INSTR_FIELD_ALL;
-        case OPCODE_ST:   return INSTR_FIELD_ALL;
-        case OPCODE_ADD:  return INSTR_FIELD_ALL; // -ADD displayed as SUB
-        case OPCODE_NEG:  return INSTR_FIELD_REG;
-        case OPCODE_LDM:  return INSTR_FIELD_ALL_DISPLAY_SIGN;
-        case OPCODE_ADDM: return INSTR_FIELD_ALL; // -ADDM displayed as SUBM
-        case OPCODE_BR:   return INSTR_FIELD_MEM;
-        case OPCODE_BRC:  return INSTR_FIELD_ALL;
-        case OPCODE_GETC: return INSTR_FIELD_NONE;
-        case OPCODE_OUT:  return INSTR_FIELD_NONE;
-        case OPCODE_PUTS: return INSTR_FIELD_MEM;
-        case OPCODE_DMP:  return INSTR_FIELD_NONE;
-        case OPCODE_MEM:  return INSTR_FIELD_NONE;
-        default:          return INSTR_FIELD_NONE;
+    bitfield_t bitfield = {
+        .pos = pos,
+        .len = len,
+        .mask = (uint16_t) BITMASK_FIELD(pos, len)
+    };
+
+    return bitfield;
+}
+
+uint16_t bitfield_get_field(const bitfield_t field, const instr_t instr)
+{
+    return ((instr.raw & field.mask) >> (instr_len - field.pos));
+}
+
+/**
+ * Resizes a signed 2s-complement bitstring to `int16_t`
+ * @param raw   the raw bitstring of n-bits
+ * @param mask  the mask for the bitstring
+ * @param len   the length of the bitstring in bits
+ *
+ * @return the resized signed bitstring to `int16_t
+ */
+int16_t bitfield_get_field_signed(const bitfield_t field, const instr_t instr) {
+    const uint16_t raw = bitfield_get_field(field, instr);
+
+    int16_t result = 0;
+    const uint32_t mask = field.mask;
+
+    if (SIGN_N(raw, field.len) == NEGATIVE_SIGN_BIT) {
+        result = (int16_t) ((UINT32_MAX & ~mask) | raw);
+    } else {
+        result = raw;
     }
+
+    return result;
+}
+
+reg_args_t instr_get_args(const instr_t instr)
+{
+    const uint8_t reg_len = 3;
+    const bitfield_t reg1 = bitfield_create(9, reg_len);
+    const bitfield_t reg2 = bitfield_create(6, reg_len);
+    const bitfield_t reg3 = bitfield_create(0, reg_len);
+    const bitfield_t offset6 = bitfield_create(0, 6);
+    const bitfield_t offset9 = bitfield_create(0, 9);
+    const bitfield_t offset11 = bitfield_create(0, 11);
+    const bitfield_t imm5 = bitfield_create(0, 5);
+    const bitfield_t cc = reg1;
+    const bitfield_t trap = bitfield_create(0, 8);
+
+    reg_args_t args;
+
+    switch (instr.format) {
+        case REG_FORMAT_PC_OFFSET: {
+            args.pc_offset.rn =
+                (reg3_t) bitfield_get_field(reg1, instr);
+
+            args.pc_offset.offset =
+                (offset9_t) bitfield_get_field_signed(offset9, instr);
+
+            break;
+        }
+
+        case REG_FORMAT_BASE_OFFSET:
+            args.base_offset.rn =
+                (reg3_t) bitfield_get_field(reg1, instr);
+
+            args.base_offset.rb =
+                (reg3_t) bitfield_get_field(reg2, instr);
+
+            args.base_offset.offset =
+                (offset6_t) bitfield_get_field_signed(offset6, instr);
+
+            break;
+
+        case REG_FORMAT_REG_2:
+            args.reg_2.rn =
+                (reg3_t) bitfield_get_field(reg1, instr);
+
+            args.reg_2.ra =
+                (reg3_t) bitfield_get_field(reg2, instr);
+
+            break;
+
+        case REG_FORMAT_REG_2_IMM:
+            args.reg_2_imm.rn =
+                (reg3_t) bitfield_get_field(reg1, instr);
+
+            args.reg_2_imm.ra =
+                (reg3_t) bitfield_get_field(reg1, instr);
+
+            args.reg_2_imm.imm =
+                (uint8_t) bitfield_get_field(imm5, instr);
+
+            break;
+
+        case REG_FORMAT_REG_3:
+            args.reg_3.rc =
+                (reg3_t) bitfield_get_field(reg1, instr);
+
+            args.reg_3.ra =
+                (reg3_t) bitfield_get_field(reg2, instr);
+
+            args.reg_3.rb =
+                (reg3_t) bitfield_get_field(reg3, instr);
+
+            break;
+
+        case REG_FORMAT_BR:
+            args.br.cc =
+                (condition_code_t) bitfield_get_field(cc, instr);
+
+            args.br.pc_offset =
+                (offset9_t) bitfield_get_field_signed(offset9, instr);
+
+            break;
+
+        case REG_FORMAT_TRAP:
+            args.trap.vector =
+                (trap_vector_t) bitfield_get_field(trap, instr);
+
+            break;
+
+        case REG_FORMAT_JSR:
+            args.jsr.pc_offset =
+                (offset11_t) bitfield_get_field(offset11, instr);
+
+            break;
+
+        case REG_FORMAT_JSRR:
+            args.jsrr.rq =
+                (reg3_t) bitfield_get_field(reg2, instr);
+
+        case REG_FORMAT_NO_ARGS:
+            args.no_args = 0;
+            break;
+
+        default:
+            args.invalid = 0;
+    }
+
+    return args;
+}
+
+
+instr_t instr_decode(word_t mem)
+{
+    instr_t instr = EMPTY_INSTR;
+
+    instr.raw = mem;
+    instr.opcode = instr_get_opcode(instr);
+    instr.format = instr_get_format(instr);
+    instr.args = instr_get_args(instr);
+    instr.mnemonic = instr_get_mnemonic(instr);
+
+    return instr;
 }
 
 // Prints its mnemonic form.
 void instr_print(instr_t instr)
 {
+    printf("x%04X  ", (uword_t) instr.raw);
+    printf("%*d  ", 6, instr.raw);
+
     const char *mnemonic = instr_get_mnemonic(instr);
-    printf("%-4s", mnemonic);
+    printf("%-4s  ", mnemonic);
 
-    const instr_fields_t fields = opcode_get_fields(instr.opcode);
-    const uint8_t length = instr_fields_get_length(fields);
-    if (length > 0) {
-        printf(" ");
+    reg_args_t args = instr.args;
 
-        if (fields & INSTR_FIELD_REG) {
-            printf(" R%d", instr.r);
+    switch (instr.format) {
+        case REG_FORMAT_PC_OFFSET: {
+            printf("R%d, ", args.pc_offset.rn);
+            printf("R%d, ", args.pc_offset.rn);
+            printf("%d", args.pc_offset.offset);
+            break;
         }
 
-        if (fields & INSTR_FIELD_MEM) {
-            if (length > 1) {
-                printf(", ");
-            }
+        case REG_FORMAT_BASE_OFFSET:
+            printf("R%d, ", args.base_offset.rn);
+            printf("R%d, ", args.base_offset.rb);
+            printf("%d", args.base_offset.offset);
+            break;
 
-            int32_t val = instr.mm;
+        case REG_FORMAT_REG_2:
+            printf("R%d, ", args.reg_2.rn);
+            printf("R%d", args.reg_2.ra);
+            break;
 
-            if (fields & INSTR_FIELD_DISPLAY_SIGN) {
-                val *= instr.sign;
-            }
+        case REG_FORMAT_REG_2_IMM:
+            printf("R%d, ", args.reg_2_imm.rn);
+            printf("R%d, ", args.reg_2_imm.ra);
+            printf("%d", args.reg_2_imm.imm);
+            break;
 
-            printf("%3d", val);
-        }
+        case REG_FORMAT_REG_3:
+            printf("R%d, ", args.reg_3.rc);
+            printf("R%d, ", args.reg_3.ra);
+            printf("R%d", args.reg_3.rb);
+            break;
+
+        case REG_FORMAT_BR:
+            printf("%d", args.reg_3.rb);
+            break;
+
+        case REG_FORMAT_TRAP:
+            printf("%02X", args.trap.vector);
+            break;
+
+        case REG_FORMAT_JSR:
+            printf("%d", args.jsr.pc_offset);
+            break;
+
+        case REG_FORMAT_JSRR:
+            printf("R%d", args.jsrr.rq);
+
+        case REG_FORMAT_NO_ARGS:
+            break;
+
+        default:
+            break;
     }
 }
 
@@ -629,7 +894,8 @@ bool cpu_execute_command(cpu_t *cpu, const char c, bool *will_continue)
 //
 void print_invalid_command(void)
 {
-    printf("error: invalid command. expected 'h', '?', 'd', 'q', '\\n', or integer >= 1\n");
+    printf(
+        "error: invalid command. expected 'h', '?', 'd', 'q', '\\n', or integer >= 1\n");
 }
 
 // Print standard message for simulator help command ('h' or '?')
@@ -664,7 +930,8 @@ void cpu_step_n(cpu_t *cpu, const int32_t num_cycles)
 
     const int max_cycles = 100;
     if (num_cycles > max_cycles) {
-        printf("warn: number of cycles too large. defaulting to %d cycles.", max_cycles);
+        printf("warn: number of cycles too large. defaulting to %d cycles.",
+            max_cycles);
     }
 
     if (!cpu->is_running) {
@@ -704,86 +971,17 @@ void cpu_step(cpu_t *cpu)
     cpu->ir = cpu->mem[cpu->pc];
     (cpu->pc)++;
 
-    const instr_t instr = instr_from_mem(cpu->ir);
+    const instr_t instr = instr_decode(cpu->ir);
     cpu->instr = instr;
 
     mem_println_with_addr(cpu->ir, addr);
 
-    switch ((cpu->instr).opcode) {
-        case OPCODE_HALT:
-            cpu_halt(cpu);
-            break;
-
-        case OPCODE_LD:
-            cpu->reg[instr.r] = cpu->mem[instr.mm];
-            break;
-
-        case OPCODE_ST:
-            cpu->mem[instr.mm] = cpu->reg[instr.r];
-            break;
-
-        case OPCODE_ADD:
-            cpu->reg[instr.r] += instr.sign * cpu->mem[instr.mm];
-            break;
-
-        case OPCODE_NEG:
-            cpu->reg[instr.r] *= -1;
-            break;
-
-        case OPCODE_LDM:
-            cpu->reg[instr.r] = instr.sign * instr.mm;
-            break;
-
-        case OPCODE_ADDM:
-            cpu->reg[instr.r] += instr.sign * instr.mm;
-            break;
-
-        case OPCODE_BR:
-            cpu->pc = (address_t) instr.mm;
-            break;
-
-        case OPCODE_BRC: {
-            const word_t reg = cpu->reg[instr.r];
-            if (reg == 0 || sign(reg) == instr.sign) {
-                cpu->pc = (address_t) instr.mm;
-            }
-            break;
-        }
-
-        case OPCODE_GETC: {
-            printf("in > ");
-            const char c = (char) getchar();
-            cpu->reg[0] = c;
-            break;
-        }
-
-        case OPCODE_OUT:
-            printf("out> %c\n", cpu->reg[0]);
-            break;
-
-        case OPCODE_PUTS: {
-            printf("out> ");
-            address_t strptr = (address_t) instr.mm;
-            while (cpu->mem[strptr] != '\0') {
-                putchar(cpu->mem[strptr]);
-                strptr++;
-            }
-            printf("\n");
-            break;
-        }
-
-        case OPCODE_DMP:
-            printf("info: dumping cpu registers and memory...\n\n");
-            cpu_dump(cpu);
-            break;
-
-        case OPCODE_MEM:
-            printf("info: dumping cpu memory...\n\n");
-            cpu_dump_memory(cpu);
-            break;
-
+    const uint8_t opcode = (cpu->instr).opcode;
+    switch (opcode) {
+        // TODO: FP2
         default:
-            printf("warn: bad opcode '%d'. ignoring.\n", abs(instr.opcode));
+            printf("warn: execution not implemented in Phase 1...\n");
+            //printf("warn: bad opcode '%d'. ignoring.\n", opcode);
     }
 
     if (!cpu_check_sanity(cpu)) return;
