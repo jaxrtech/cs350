@@ -11,6 +11,16 @@
 #include <stdlib.h>
 #include <stdint.h>
 
+
+/* application defines */
+
+#define DEFAULT_INPUT_PATH "default.hex";
+
+#define ENABLE_SKIP_MEMORY_MESSAGES false
+
+
+/* bitstring manipulation */
+
 #define BITMASK_N(N)  ((1u << (N)) - 1u)
 
 #define BITMASK_FIELD(POS, N)  (((1u << (N)) - 1u) << (POS))
@@ -18,6 +28,20 @@
 #define SIGN_N(X, N)  ((X) >> ((N) - 1u))
 
 #define NEGATIVE_SIGN_BIT 0x1
+
+typedef struct {
+    /* Position of the field in the instr in bits */
+    uint8_t pos;
+
+    /* Length of the field in the instr in bits */
+    uint8_t len;
+
+    /* Mask of the field in the instr */
+    uint16_t mask;
+} bitfield_t;
+
+
+/* memory type definitions */
 
 // A word of LC-3 memory
 typedef int16_t word_t;
@@ -28,14 +52,21 @@ typedef uint16_t uword_t;
 // An address to a location in SDC memory
 typedef uint16_t address_t;
 
-// Length of SDC memory in terms `word_t`
-#define CPU_MEMORY_LENGTH UINT16_MAX
+// An instruction argument specifying the register number
+typedef uint8_t reg3_t;
 
-// Number of general purpose registers on the SDC
-#define CPU_NUM_REGISTERS 8
+// A signed 6-bit offset (used to represent PC-offset)
+typedef int8_t offset6_t;
 
-// Length of an instruction in bits
-const uint8_t instr_len = 16;
+// A signed 9-bit offset (used to represent PC-offset)
+typedef int16_t offset9_t;
+
+// A signed 11-bit offset (used to represent PC-offset)
+typedef int16_t offset11_t;
+
+// A signed 5-bit integer (used to represent immediate value)
+typedef int8_t int5_t;
+
 
 // An LC-3 instruction opcode.
 typedef enum {
@@ -62,7 +93,7 @@ typedef enum {
     OPCODE_BR   = UINT8_C(0b0000), // 0
     OPCODE_TRAP = UINT8_C(0b1111), // 15
     OPCODE_JSR  = UINT8_C(0b0100), // 4
-    OPCODE_RET  = UINT8_C(0b1100), // 12
+    OPCODE_JMP  = UINT8_C(0b1100), // 12
 
 } opcode_t;
 
@@ -76,15 +107,6 @@ typedef enum {
     TRAP_PUTSP = UINT8_C(0x20)
 } trap_vector_t;
 
-typedef uint8_t reg3_t;
-
-typedef int8_t offset6_t;
-
-typedef int16_t offset9_t;
-
-typedef int16_t offset11_t;
-
-typedef uint8_t uint5_t;
 
 // A flag enum for the branch condition codes
 typedef enum {
@@ -93,8 +115,13 @@ typedef enum {
     CC_ZERO     = 1 << 1,
     CC_NEGATIVE = 1 << 2,
     CC_ALL = CC_NEGATIVE | CC_POSITIVE | CC_ZERO
-} condition_code_t;
+} cc_t;
 
+
+/* instruction formats */
+
+// Length of an instruction in bits
+const uint8_t instr_len = 16;
 
 typedef struct {
     reg3_t rn;
@@ -117,7 +144,7 @@ typedef struct {
     reg3_t rn;
     reg3_t ra;
     // ignored - 1 bit
-    uint5_t imm;
+    int5_t imm;
 } reg_2_imm_t;
 
 typedef struct {
@@ -128,7 +155,7 @@ typedef struct {
 } reg_3_t;
 
 typedef struct {
-    condition_code_t cc; // 3 bits
+    cc_t cc; // 3 bits
     offset9_t pc_offset; // 9 bits
 } reg_br_t;
 
@@ -146,7 +173,7 @@ typedef struct {
     // ignored - 3 bits
     reg3_t rq;
     // ignored - 6 bits
-} reg_jsrr_t;
+} reg_1_t;
 
 typedef uint8_t reg_no_args_t;
 
@@ -161,13 +188,13 @@ typedef union {
     reg_br_t br;
     reg_trap_t trap;
     reg_jsr_t jsr;
-    reg_jsrr_t jsrr;
+    reg_1_t reg_1;
     reg_no_args_t no_args;
 } reg_args_t;
 
 
 typedef enum {
-    REG_FORMAT_UKNOWN,
+    REG_FORMAT_UNKNOWN,
     REG_FORMAT_PC_OFFSET,
     REG_FORMAT_BASE_OFFSET,
     REG_FORMAT_REG_2,
@@ -176,7 +203,7 @@ typedef enum {
     REG_FORMAT_BR,
     REG_FORMAT_TRAP,
     REG_FORMAT_JSR,
-    REG_FORMAT_JSRR,
+    REG_FORMAT_REG_1,
     REG_FORMAT_NO_ARGS,
 } reg_format_t;
 
@@ -195,85 +222,90 @@ typedef struct {
 const instr_t EMPTY_INSTR = {
     .raw = (uint16_t) 0,
     .opcode = 0,
-    .format = REG_FORMAT_UKNOWN,
+    .format = REG_FORMAT_UNKNOWN,
     .args.invalid = 0,
 };
 
-typedef struct {
-    /* Position of the field in the instr in bits */
-    uint8_t pos;
 
-    /* Length of the field in the instr in bits */
-    uint8_t len;
+/* cpu_t declaration  */
 
-    /* Mask of the field in the instr */
-    uint16_t mask;
-} bitfield_t;
+// Length of SDC memory in terms `word_t`
+#define CPU_MEMORY_LENGTH UINT16_MAX
+
+// Number of general purpose registers on the SDC
+#define CPU_NUM_REGISTERS 7
 
 // A representation of the state of an LC-3 cpu_t and its memory.
 typedef struct {
+    /** origin of the program */
+    address_t origin;
+
+    /** memory */
     word_t mem[CPU_MEMORY_LENGTH];
-    word_t reg[CPU_NUM_REGISTERS];      // Note: "register" is a reserved word
-    address_t pc;        // Program Counter
-    bool is_running;     // is_running = 1 iff cpu_t is executing instructions
-    word_t ir;           // Instruction Register
-    instr_t instr;       // instruction
+
+    /** register */
+    word_t reg[CPU_NUM_REGISTERS];
+
+    /** program counter */
+    address_t pc;
+
+    /** running flag */
+    bool is_running;
+
+    /** instruction register */
+    word_t ir;
+
+    /** control code **/
+    cc_t cc;
+
+    /** current decoded instruction */
+    instr_t instr;
 } cpu_t;
 
+
+/* function prototypes */
 
 int main(int argc, char *argv[]);
 
 FILE *open_input_file(int argc, char **argv);
-
-int8_t sign(const int32_t x);
-
-void cpu_init(cpu_t *cpu);
-
-void cpu_load_from_file(cpu_t *cpu, FILE *input_file);
-
-void cpu_dump(cpu_t *cpu);
-
-void cpu_dump_memory(cpu_t *cpu);
-
-void cpu_dump_registers(cpu_t *cpu);
-
-bool cpu_execute_command(cpu_t *cpu, const char c, bool *will_continue);
-
-void mem_check(word_t mem);
-
-opcode_t instr_get_opcode(instr_t instr);
-
-void mem_print(const word_t mem);
-
-void mem_println_with_addr(const word_t mem, const address_t address);
-
-instr_t instr_decode(word_t mem);
-
-reg_format_t instr_get_format(const instr_t instr);
-
-char *instr_get_mnemonic(const instr_t instr);
-
-void instr_print(instr_t  instr);
-
 bool read_command_execute(cpu_t *cpu);
 
-
 void print_invalid_command(void);
-
 void print_help(void);
 
-void cpu_step_n(cpu_t *cpu, const int32_t num_cycles);
+/* cpu_t functions */
+void cpu_init(cpu_t *cpu);
+void cpu_load_from_file(cpu_t *cpu, FILE *input_file);
+bool cpu_execute_command(cpu_t *cpu, const char c, bool *will_continue);
 
+void cpu_get_cc_str(cpu_t *cpu, char buffer[4]);
+void cpu_dump(cpu_t *cpu);
+void cpu_dump_memory(cpu_t *cpu);
+void cpu_dump_registers(cpu_t *cpu);
+
+void cpu_step_n(cpu_t *cpu, const int32_t num_cycles);
 void cpu_step(cpu_t *cpu);
 
 void cpu_halt(cpu_t *cpu);
 
-//
-//
+/* word_t functions */
+void mem_check(word_t mem);
+void mem_print(const word_t mem);
+void mem_println_with_addr(const word_t mem, const address_t address);
+
+/* instr_t functions */
+instr_t instr_decode(word_t mem);
+opcode_t instr_get_opcode(instr_t instr);
+reg_format_t instr_get_format(const instr_t instr);
+char *instr_get_mnemonic(const instr_t instr);
+void instr_print(instr_t  instr);
+
+
+/* function implementations */
 
 int main(int argc, char *argv[])
 {
-    printf("SDC Simulator - Part 2\n");
+    printf("LC-3 Simulator (Final Project - Phase 1)\n");
     printf("CS 350 Lab 6\n");
     printf("Josh Bowden - Section L03\n");
     printf("~~~\n");
@@ -285,7 +317,9 @@ int main(int argc, char *argv[])
     cpu_load_from_file(cpu, input_file);
     fclose(input_file);
 
+    printf("\n");
     cpu_dump(cpu);
+
     printf("\nRunning CPU... Type h for help\n");
 
     const char *prompt = "> ";
@@ -305,7 +339,6 @@ int main(int argc, char *argv[])
 // The default file path is used otherwise
 FILE *open_input_file(int argc, char **argv)
 {
-#define DEFAULT_INPUT_PATH "default.hex";
     char *path = NULL;
 
     if (argc >= 2) {
@@ -320,7 +353,7 @@ FILE *open_input_file(int argc, char **argv)
         printf("error: failed to open input file '%s'\n", path);
         exit(EXIT_FAILURE);
     }
-    printf("info: using input file at '%s'\n", path);
+    printf("info: loading '%s'\n", path);
 
     return input_file;
 }
@@ -332,9 +365,11 @@ void cpu_init(cpu_t *cpu)
     memset(cpu->reg, 0, CPU_NUM_REGISTERS * sizeof(word_t));
     memset(cpu->mem, 0, CPU_MEMORY_LENGTH * sizeof(word_t));
 
+    cpu->origin = 0;
     cpu->pc = 0;
     cpu->is_running = true;
     cpu->ir = 0;
+    cpu->cc = CC_ZERO;
     cpu->instr = EMPTY_INSTR;
 }
 
@@ -357,6 +392,14 @@ void cpu_load_from_file(cpu_t *cpu, FILE *input_file)
         int32_t n = sscanf(buffer, "%x", &x);
         if (n <= 0) continue;
 
+        // Use the first line the starting address in memory
+        if (line == 1) {
+            cpu->origin = (address_t) x;
+            cpu->pc = cpu->origin;
+            i = (uint32_t) x;
+            continue;
+        }
+
         cpu->mem[i] = (word_t) x;
 
         // Wrap around memory at end
@@ -369,11 +412,15 @@ void cpu_load_from_file(cpu_t *cpu, FILE *input_file)
 // `skip_count` > 0.
 void cpu_dump_memory_print_skips(uint32_t skip_count)
 {
+#if ENABLE_SKIP_MEMORY_MESSAGES
+
     if (skip_count > 0) {
         printf(
-            "| ~~~ |  ~~~~~   (skipped %d empty memory locations)\n",
+            "                      (skipped %d empty memory locations)\n",
             skip_count);
     }
+
+#endif
 }
 
 // Interprets a memory value as an instruction and prints it in mnemonic form
@@ -398,10 +445,13 @@ void mem_println_with_addr(const word_t mem, const address_t address)
 //
 void cpu_dump_memory(cpu_t *cpu)
 {
-    printf("\n");
+    const address_t start =
+        (const address_t) ((cpu->pc == cpu->origin) ? cpu->origin : 0);
+
+    printf("MEMORY (from x%04X):\n", start);
 
     uint32_t skip_count = 0;
-    for (address_t i = 0; i < CPU_MEMORY_LENGTH; i++) {
+    for (address_t i = start; i < CPU_MEMORY_LENGTH; i++) {
         word_t mem = cpu->mem[i];
 
         if (mem == 0) {
@@ -424,23 +474,49 @@ void cpu_dump_memory(cpu_t *cpu)
 void cpu_dump(cpu_t *cpu)
 {
     cpu_dump_registers(cpu);
-    printf("\n");
+    printf("\n\n");
     cpu_dump_memory(cpu);
+}
+
+#define CC_STR_LEN 4 // 3 chars + '\0'
+void cpu_get_cc_str(cpu_t *cpu, char buffer[CC_STR_LEN]) {
+    memset(buffer, 0, CC_STR_LEN);
+
+    uint8_t i = 0;
+    cc_t cc = cpu->cc;
+    if ((cc & CC_NEGATIVE) != 0) {
+        buffer[i] = 'N'; i++;
+    }
+    if ((cc & CC_ZERO) != 0) {
+        buffer[i] = 'Z'; i++;
+    }
+    if ((cc & CC_POSITIVE) != 0) {
+        buffer[i] = 'P'; i++;
+    }
 }
 
 // Prints the current value of each register
 void cpu_dump_registers(cpu_t *cpu)
 {
-    const int cols = 5;
+    const int cols = 4;
 
-    printf("PC: %6d  IR: %6d  RUNNING: %1d\n",
-        cpu->pc,
-        cpu->ir,
-        cpu->is_running);
+    char cc_str[CC_STR_LEN] = {0};
+    cpu_get_cc_str(cpu, cc_str);
+
+    const uint8_t spaces = 10;
+
+    printf("CONTROL UNIT:\n");
+    printf("PC: x%04X", cpu->pc);
+    printf("%*c", spaces, ' ');
+    printf("IR: x%04X", cpu->ir);
+    printf("%*c", spaces, ' ');
+    printf("CC: %-3s", cc_str);
+    printf("%*c", spaces+2, ' ');
+    printf("RUNNING: %1d\n", cpu->is_running);
 
     for (int i = 0; i < CPU_NUM_REGISTERS; i++) {
         int x = cpu->reg[i];
-        printf("R%d: %6d", i, x);
+        printf("R%d: x%04X  %-6d", i, x, x);
 
         const bool is_end_of_row = (i + 1) % cols == 0;
         if (is_end_of_row) {
@@ -449,14 +525,6 @@ void cpu_dump_registers(cpu_t *cpu)
             printf("  ");
         }
     }
-}
-
-// Gets the positive or negative sign of a signed integer.
-// Returns (+/-) 1 as the sign.
-int8_t sign(const int32_t x)
-{
-    if (x >= 0) return 1;
-    else return -1;
 }
 
 // Gets the opcode a memory value represents as an SDC instruction.
@@ -476,6 +544,7 @@ reg_format_t instr_get_format(const instr_t instr)
         case OPCODE_ST:
         case OPCODE_LDI:
         case OPCODE_STI:
+        case OPCODE_LEA:
             return REG_FORMAT_PC_OFFSET;
 
         case OPCODE_LDR:
@@ -508,15 +577,15 @@ reg_format_t instr_get_format(const instr_t instr)
             if ((instr.raw & jsr_mask) == jsr_mask) {
                 return REG_FORMAT_JSR;
             } else {
-                return REG_FORMAT_JSRR;
+                return REG_FORMAT_REG_1;
             }
         }
 
-        case OPCODE_RET:
-            return REG_FORMAT_NO_ARGS;
+        case OPCODE_JMP:
+            return REG_FORMAT_REG_1;
 
         default:
-            return REG_FORMAT_UKNOWN;
+            return REG_FORMAT_UNKNOWN;
     }
 }
 
@@ -535,28 +604,28 @@ char *instr_get_mnemonic(const instr_t instr)
         case OPCODE_ADD:  return "ADD";
         case OPCODE_AND:  return "AND";
         case OPCODE_TRAP: return "TRAP";
-        case OPCODE_RET:  return "RET";
+        case OPCODE_JMP:  return "JMP";
         case OPCODE_BR: {
-            switch (instr.args.br.cc) {
-                case CC_NONE:                   return "NOP";
-                case CC_ALL:                    return "BR";
-                case CC_NEGATIVE:               return "BRN";
-                case CC_ZERO:                   return "BRZ";
-                case CC_POSITIVE:               return "BRP";
-                case CC_NEGATIVE | CC_ZERO:     return "BRNZ";
-                case CC_NEGATIVE | CC_POSITIVE: return "BRNP";
-                case CC_ZERO | CC_POSITIVE:     return "BRZP";
-                default:
-                    fprintf(
-                        stderr,
-                        "error: instr_get_mnemonic(): invalid branch cc\n");
-                    exit(1);
-            }
+            cc_t cc = instr.args.br.cc;
+            if (cc == CC_NONE)                     return "NOP";
+            if (cc == CC_ALL)                      return "BR";
+            if (cc == CC_NEGATIVE)                 return "BRN";
+            if (cc == CC_ZERO)                     return "BRZ";
+            if (cc == CC_POSITIVE)                 return "BRP";
+            if (cc == (CC_NEGATIVE | CC_ZERO))     return "BRNZ";
+            if (cc == (CC_NEGATIVE | CC_POSITIVE)) return "BRNP";
+            if (cc == (CC_ZERO | CC_POSITIVE))     return "BRZP";
+
+            fprintf(
+                stderr,
+                "error: instr_get_mnemonic(): invalid branch cc\n");
+
+            exit(1);
         }
         case OPCODE_JSR: {
             switch (instr.format) {
-                case REG_FORMAT_JSR: return "JSR";
-                case REG_FORMAT_JSRR: return "JSRR";
+                case REG_FORMAT_JSR:   return "JSR";
+                case REG_FORMAT_REG_1: return "JSRR";
                 default:
                     fprintf(
                         stderr,
@@ -564,7 +633,7 @@ char *instr_get_mnemonic(const instr_t instr)
                     exit(1);
             }
         }
-        default:          return "NOP";
+        default: return "NOP";
     }
 }
 
@@ -581,7 +650,7 @@ bitfield_t bitfield_create(uint8_t pos, uint8_t len)
 
 uint16_t bitfield_get_field(const bitfield_t field, const instr_t instr)
 {
-    return ((instr.raw & field.mask) >> (instr_len - field.pos));
+    return ((instr.raw & field.mask) >> field.pos);
 }
 
 /**
@@ -662,7 +731,7 @@ reg_args_t instr_get_args(const instr_t instr)
                 (reg3_t) bitfield_get_field(reg1, instr);
 
             args.reg_2_imm.imm =
-                (uint8_t) bitfield_get_field(imm5, instr);
+                (uint8_t) bitfield_get_field_signed(imm5, instr);
 
             break;
 
@@ -680,7 +749,7 @@ reg_args_t instr_get_args(const instr_t instr)
 
         case REG_FORMAT_BR:
             args.br.cc =
-                (condition_code_t) bitfield_get_field(cc, instr);
+                (cc_t) bitfield_get_field(cc, instr);
 
             args.br.pc_offset =
                 (offset9_t) bitfield_get_field_signed(offset9, instr);
@@ -699,9 +768,11 @@ reg_args_t instr_get_args(const instr_t instr)
 
             break;
 
-        case REG_FORMAT_JSRR:
-            args.jsrr.rq =
+        case REG_FORMAT_REG_1:
+            args.reg_1.rq =
                 (reg3_t) bitfield_get_field(reg2, instr);
+
+            break;
 
         case REG_FORMAT_NO_ARGS:
             args.no_args = 0;
@@ -742,7 +813,6 @@ void instr_print(instr_t instr)
     switch (instr.format) {
         case REG_FORMAT_PC_OFFSET: {
             printf("R%d, ", args.pc_offset.rn);
-            printf("R%d, ", args.pc_offset.rn);
             printf("%d", args.pc_offset.offset);
             break;
         }
@@ -771,19 +841,19 @@ void instr_print(instr_t instr)
             break;
 
         case REG_FORMAT_BR:
-            printf("%d", args.reg_3.rb);
+            printf("%d", args.br.pc_offset);
             break;
 
         case REG_FORMAT_TRAP:
-            printf("%02X", args.trap.vector);
+            printf("x%02X", args.trap.vector);
             break;
 
         case REG_FORMAT_JSR:
             printf("%d", args.jsr.pc_offset);
             break;
 
-        case REG_FORMAT_JSRR:
-            printf("R%d", args.jsrr.rq);
+        case REG_FORMAT_REG_1:
+            printf("R%d", args.reg_1.rq);
 
         case REG_FORMAT_NO_ARGS:
             break;
@@ -947,12 +1017,7 @@ void cpu_step_n(cpu_t *cpu, const int32_t num_cycles)
 
 bool cpu_check_sanity(cpu_t *cpu)
 {
-    if (cpu->pc < 0 || cpu->pc > 99) {
-        printf("error: pc is out of range. halting execution...");
-        cpu_halt(cpu);
-        return false;
-    }
-
+    // TODO: FP2
     return true;
 }
 
@@ -960,6 +1025,11 @@ bool cpu_check_sanity(cpu_t *cpu)
 //
 void cpu_step(cpu_t *cpu)
 {
+    printf("warn: execution not implemented in Phase 1...\n");
+    return;
+
+    /*
+
     if (!cpu->is_running) {
         printf("info: cpu has halted. ignoring.\n");
         return;
@@ -980,11 +1050,12 @@ void cpu_step(cpu_t *cpu)
     switch (opcode) {
         // TODO: FP2
         default:
-            printf("warn: execution not implemented in Phase 1...\n");
-            //printf("warn: bad opcode '%d'. ignoring.\n", opcode);
+            printf("warn: bad opcode '%d'. ignoring.\n", opcode);
     }
 
     if (!cpu_check_sanity(cpu)) return;
+
+    */
 }
 
 // Execute the halt instruction (make cpu_t stop running)
