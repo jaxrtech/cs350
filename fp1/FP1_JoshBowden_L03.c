@@ -233,7 +233,7 @@ const instr_t EMPTY_INSTR = {
 #define CPU_MEMORY_LENGTH UINT16_MAX
 
 // Number of general purpose registers on the SDC
-#define CPU_NUM_REGISTERS 7
+#define CPU_NUM_REGISTERS 8
 
 // A representation of the state of an LC-3 cpu_t and its memory.
 typedef struct {
