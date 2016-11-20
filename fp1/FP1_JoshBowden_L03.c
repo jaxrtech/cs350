@@ -1,6 +1,6 @@
 // CS 350, Fall 2016
 //
-// Josh Bowden - Section L03
+// Josh Bowden & Huzair Kalia - Section L03
 //
 // Final Project: LC-3 Simulator, Phase 1
 //
@@ -267,11 +267,11 @@ typedef struct {
 
 int main(int argc, char *argv[]);
 
+/* application operations */
 FILE *open_input_file(int argc, char **argv);
 bool read_command_execute(cpu_t *cpu);
-
-void print_invalid_command(void);
 void print_help(void);
+void print_invalid_command(void);
 
 /* cpu_t functions */
 void cpu_init(cpu_t *cpu);
@@ -283,13 +283,11 @@ void cpu_dump(cpu_t *cpu);
 void cpu_dump_memory(cpu_t *cpu);
 void cpu_dump_registers(cpu_t *cpu);
 
-void cpu_step_n(cpu_t *cpu, const int32_t num_cycles);
 void cpu_step(cpu_t *cpu);
-
+void cpu_step_n(cpu_t *cpu, const int32_t num_cycles);
 void cpu_halt(cpu_t *cpu);
 
 /* word_t functions */
-void mem_check(word_t mem);
 void mem_print(const word_t mem);
 void mem_println_with_addr(const word_t mem, const address_t address);
 
@@ -298,7 +296,13 @@ instr_t instr_decode(word_t mem);
 opcode_t instr_get_opcode(instr_t instr);
 reg_format_t instr_get_format(const instr_t instr);
 char *instr_get_mnemonic(const instr_t instr);
+reg_args_t instr_get_args(const instr_t instr);
 void instr_print(instr_t  instr);
+
+/* bitfield_t functions */
+bitfield_t bitfield_create(uint8_t pos, uint8_t len);
+uint16_t bitfield_get_field(const bitfield_t field, const instr_t instr);
+int16_t bitfield_get_field_signed(const bitfield_t field, const instr_t instr);
 
 
 /* function implementations */
@@ -307,7 +311,7 @@ int main(int argc, char *argv[])
 {
     printf("LC-3 Simulator (Final Project - Phase 1)\n");
     printf("CS 350 Lab 6\n");
-    printf("Josh Bowden - Section L03\n");
+    printf("Josh Bowden & Huzair Kalia - Section L03\n");
     printf("~~~\n");
 
     FILE *input_file = open_input_file(argc, argv);
@@ -358,6 +362,69 @@ FILE *open_input_file(int argc, char **argv)
     return input_file;
 }
 
+// Read a simulator command from the keyboard (q, h, ?, d, number,
+// or empty line) and execute it.
+// Return true if the execution should continue, false otherwise.
+//
+bool read_command_execute(cpu_t *cpu)
+{
+    // Buffer to read next command line into
+#define LINE_BUF_LEN 80
+    char line[LINE_BUF_LEN];
+
+    char *result = fgets(line, LINE_BUF_LEN, stdin);
+    if (result == NULL) {
+        printf("info: reached end-of-file on input. exiting...\n");
+        return false;
+    }
+
+    int matches;
+    char c;
+    matches = sscanf(line, "%c", &c);
+    if (matches == 1) {
+        bool will_continue = true;
+        if (cpu_execute_command(cpu, c, &will_continue)) {
+            return will_continue;
+        }
+    }
+
+    int n;
+    matches = sscanf(line, "%d", &n);
+    if (matches == 1) {
+        cpu_step_n(cpu, n);
+        return true;
+    }
+
+    print_invalid_command();
+    return true;
+}
+
+// Print out message saying that the command was invalid
+//
+void print_invalid_command(void)
+{
+    printf(
+            "error: invalid command. expected 'h', '?', 'd', 'q', '\\n', or integer >= 1\n");
+}
+
+// Print standard message for simulator help command ('h' or '?')
+//
+void print_help(void)
+{
+    printf(
+            "      h   print out this help message\n"
+                    "      ?   print out this help message\n"
+                    "      d   dump cpu registers and memory\n"
+                    "      r   dump cpu registers\n"
+                    "      m   dump cpu memory\n"
+                    "<enter>   execute 1 instruction cycle\n"
+                    "   1..n   execute N instructions cycles\n"
+    );
+}
+
+
+/* cpu_t functions */
+
 // Initializes the cpu_t by resetting all memory to zero and setting the
 // `RUNNING` flag to `1` to indicate the cpu_t is running.
 void cpu_init(cpu_t *cpu)
@@ -407,6 +474,84 @@ void cpu_load_from_file(cpu_t *cpu, FILE *input_file)
     }
 }
 
+// Execute a nonnumeric command; complain if it's not 'h', '?',
+// 'd', 'q' or '\n'.
+//
+// Return `true` if command is valid.
+//
+// `*will_continue` is set to `true` when the cpu will continue execution,
+// other wise false
+//
+bool cpu_execute_command(cpu_t *cpu, const char c, bool *will_continue)
+{
+    bool is_valid;
+
+    switch (c) {
+        case 'q':
+            printf("info: entered quit command. exiting...\n");
+            *will_continue = false;
+            is_valid = true;
+            break;
+
+        case 'h':
+        case '?':
+            print_help();
+            *will_continue = true;
+            is_valid = true;
+            break;
+
+        case 'd':
+            cpu_dump(cpu);
+            *will_continue = true;
+            is_valid = true;
+            break;
+
+        case 'r':
+            cpu_dump_registers(cpu);
+            *will_continue = true;
+            is_valid = true;
+            break;
+
+        case 'm':
+            cpu_dump_memory(cpu);
+            *will_continue = true;
+            is_valid = true;
+            break;
+
+        case '\n':
+            printf("info: stepping 1 cycle\n");
+            cpu_step_n(cpu, 1);
+            *will_continue = true;
+            is_valid = true;
+            break;
+
+        default:
+            *will_continue = true;
+            is_valid = false;
+            break;
+    }
+
+    return is_valid;
+}
+
+#define CC_STR_LEN 4 // 3 chars + '\0'
+void cpu_get_cc_str(cpu_t *cpu, char buffer[CC_STR_LEN])
+{
+    memset(buffer, 0, CC_STR_LEN);
+
+    uint8_t i = 0;
+    cc_t cc = cpu->cc;
+    if ((cc & CC_NEGATIVE) != 0) {
+        buffer[i] = 'N'; i++;
+    }
+    if ((cc & CC_ZERO) != 0) {
+        buffer[i] = 'Z'; i++;
+    }
+    if ((cc & CC_POSITIVE) != 0) {
+        buffer[i] = 'P'; i++;
+    }
+}
+
 // Prints a placeholder message to indicate that memory locations where skipped
 // since they were values of zero. The message is only shown when
 // `skip_count` > 0.
@@ -423,19 +568,12 @@ void cpu_dump_memory_print_skips(uint32_t skip_count)
 #endif
 }
 
-// Interprets a memory value as an instruction and prints it in mnemonic form
-void mem_print(const word_t mem)
+// Prints the current state of the cpu_t including its registers and memory
+void cpu_dump(cpu_t *cpu)
 {
-    instr_print(instr_decode(mem));
-}
-
-// Interprets a memory value as an instruction and prints it in formatted
-// mnemonic form next to its address
-void mem_println_with_addr(const word_t mem, const address_t address)
-{
-    printf("x%04X: ", address);
-    mem_print(mem);
-    printf("\n");
+    cpu_dump_registers(cpu);
+    printf("\n\n");
+    cpu_dump_memory(cpu);
 }
 
 // cpu_dump_memory(cpu_t *cpu): For each memory address that
@@ -446,7 +584,7 @@ void mem_println_with_addr(const word_t mem, const address_t address)
 void cpu_dump_memory(cpu_t *cpu)
 {
     const address_t start =
-        (const address_t) ((cpu->pc == cpu->origin) ? cpu->origin : 0);
+            (const address_t) ((cpu->pc == cpu->origin) ? cpu->origin : 0);
 
     printf("MEMORY (from x%04X):\n", start);
 
@@ -468,31 +606,6 @@ void cpu_dump_memory(cpu_t *cpu)
     }
 
     cpu_dump_memory_print_skips(skip_count);
-}
-
-// Prints the current state of the cpu_t including its registers and memory
-void cpu_dump(cpu_t *cpu)
-{
-    cpu_dump_registers(cpu);
-    printf("\n\n");
-    cpu_dump_memory(cpu);
-}
-
-#define CC_STR_LEN 4 // 3 chars + '\0'
-void cpu_get_cc_str(cpu_t *cpu, char buffer[CC_STR_LEN]) {
-    memset(buffer, 0, CC_STR_LEN);
-
-    uint8_t i = 0;
-    cc_t cc = cpu->cc;
-    if ((cc & CC_NEGATIVE) != 0) {
-        buffer[i] = 'N'; i++;
-    }
-    if ((cc & CC_ZERO) != 0) {
-        buffer[i] = 'Z'; i++;
-    }
-    if ((cc & CC_POSITIVE) != 0) {
-        buffer[i] = 'P'; i++;
-    }
 }
 
 // Prints the current value of each register
@@ -525,6 +638,116 @@ void cpu_dump_registers(cpu_t *cpu)
             printf("  ");
         }
     }
+}
+
+// Execute one instruction cycle
+//
+void cpu_step(cpu_t *cpu)
+{
+    printf("warn: execution not implemented in Phase 1...\n");
+    return;
+
+    /*
+
+    if (!cpu->is_running) {
+        printf("info: cpu has halted. ignoring.\n");
+        return;
+    }
+
+    if (!cpu_check_sanity(cpu)) return;
+
+    const address_t addr = cpu->pc;
+    cpu->ir = cpu->mem[cpu->pc];
+    (cpu->pc)++;
+
+    const instr_t instr = instr_decode(cpu->ir);
+    cpu->instr = instr;
+
+    mem_println_with_addr(cpu->ir, addr);
+
+    const uint8_t opcode = (cpu->instr).opcode;
+    switch (opcode) {
+        // TODO: FP2
+        default:
+            printf("warn: bad opcode '%d'. ignoring.\n", opcode);
+    }
+
+    if (!cpu_check_sanity(cpu)) return;
+
+    */
+}
+
+// Execute a number of instruction cycles.  Exceptions: If the
+// number of cycles is <= 0, complain and return; if the cpu_t is
+// not running, say so and return; if the number of cycles is
+// insanely large, warn the user and substitute a saner limit.
+//
+// If, as we execute the many cycles, the cpu_t stops running,
+// stop and return.
+//
+void cpu_step_n(cpu_t *cpu, const int32_t num_cycles)
+{
+    if (num_cycles <= 0) {
+        printf("error: number of cycles must be > 0\n");
+        return;
+    }
+
+    const int max_cycles = 100;
+    if (num_cycles > max_cycles) {
+        printf("warn: number of cycles too large. defaulting to %d cycles.",
+               max_cycles);
+    }
+
+    if (!cpu->is_running) {
+        printf("info: cpu has halted. ignoring.\n");
+        return;
+    }
+
+    for (int32_t n = num_cycles; n > 0; n--) {
+        cpu_step(cpu);
+        if (!cpu->is_running) return;
+    }
+}
+
+// Execute the halt instruction (make cpu_t stop running)
+void cpu_halt(cpu_t *cpu)
+{
+    printf("info: halting execution\n");
+    cpu->is_running = 0;
+}
+
+
+/* word_t functions */
+
+// Interprets a memory value as an instruction and prints it in mnemonic form
+void mem_print(const word_t mem)
+{
+    instr_print(instr_decode(mem));
+}
+
+// Interprets a memory value as an instruction and prints it in formatted
+// mnemonic form next to its address
+void mem_println_with_addr(const word_t mem, const address_t address)
+{
+    printf("x%04X: ", address);
+    mem_print(mem);
+    printf("\n");
+}
+
+
+/* instr_t functions */
+
+instr_t instr_decode(word_t mem)
+{
+    instr_t instr = EMPTY_INSTR;
+
+    instr.raw = mem;
+    instr.opcode = instr_get_opcode(instr);
+    instr.format = instr_get_format(instr);
+    instr.args = instr_get_args(instr);
+    instr.mnemonic = instr_get_mnemonic(instr);
+
+    return instr;
 }
 
 // Gets the opcode a memory value represents as an SDC instruction.
@@ -637,45 +860,6 @@ char *instr_get_mnemonic(const instr_t instr)
     }
 }
 
-bitfield_t bitfield_create(uint8_t pos, uint8_t len)
-{
-    bitfield_t bitfield = {
-        .pos = pos,
-        .len = len,
-        .mask = (uint16_t) BITMASK_FIELD(pos, len)
-    };
-
-    return bitfield;
-}
-
-uint16_t bitfield_get_field(const bitfield_t field, const instr_t instr)
-{
-    return ((instr.raw & field.mask) >> field.pos);
-}
-
-/**
- * Resizes a signed 2s-complement bitstring to `int16_t`
- * @param raw   the raw bitstring of n-bits
- * @param mask  the mask for the bitstring
- * @param len   the length of the bitstring in bits
- *
- * @return the resized signed bitstring to `int16_t
- */
-int16_t bitfield_get_field_signed(const bitfield_t field, const instr_t instr) {
-    const uint16_t raw = bitfield_get_field(field, instr);
-
-    int16_t result = 0;
-    const uint32_t mask = field.mask;
-
-    if (SIGN_N(raw, field.len) == NEGATIVE_SIGN_BIT) {
-        result = (int16_t) ((UINT32_MAX & ~mask) | raw);
-    } else {
-        result = raw;
-    }
-
-    return result;
-}
-
 reg_args_t instr_get_args(const instr_t instr)
 {
     const uint8_t reg_len = 3;
@@ -694,83 +878,83 @@ reg_args_t instr_get_args(const instr_t instr)
     switch (instr.format) {
         case REG_FORMAT_PC_OFFSET: {
             args.pc_offset.rn =
-                (reg3_t) bitfield_get_field(reg1, instr);
+                    (reg3_t) bitfield_get_field(reg1, instr);
 
             args.pc_offset.offset =
-                (offset9_t) bitfield_get_field_signed(offset9, instr);
+                    (offset9_t) bitfield_get_field_signed(offset9, instr);
 
             break;
         }
 
         case REG_FORMAT_BASE_OFFSET:
             args.base_offset.rn =
-                (reg3_t) bitfield_get_field(reg1, instr);
+                    (reg3_t) bitfield_get_field(reg1, instr);
 
             args.base_offset.rb =
-                (reg3_t) bitfield_get_field(reg2, instr);
+                    (reg3_t) bitfield_get_field(reg2, instr);
 
             args.base_offset.offset =
-                (offset6_t) bitfield_get_field_signed(offset6, instr);
+                    (offset6_t) bitfield_get_field_signed(offset6, instr);
 
             break;
 
         case REG_FORMAT_REG_2:
             args.reg_2.rn =
-                (reg3_t) bitfield_get_field(reg1, instr);
+                    (reg3_t) bitfield_get_field(reg1, instr);
 
             args.reg_2.ra =
-                (reg3_t) bitfield_get_field(reg2, instr);
+                    (reg3_t) bitfield_get_field(reg2, instr);
 
             break;
 
         case REG_FORMAT_REG_2_IMM:
             args.reg_2_imm.rn =
-                (reg3_t) bitfield_get_field(reg1, instr);
+                    (reg3_t) bitfield_get_field(reg1, instr);
 
             args.reg_2_imm.ra =
-                (reg3_t) bitfield_get_field(reg1, instr);
+                    (reg3_t) bitfield_get_field(reg1, instr);
 
             args.reg_2_imm.imm =
-                (uint8_t) bitfield_get_field_signed(imm5, instr);
+                    (uint8_t) bitfield_get_field_signed(imm5, instr);
 
             break;
 
         case REG_FORMAT_REG_3:
             args.reg_3.rc =
-                (reg3_t) bitfield_get_field(reg1, instr);
+                    (reg3_t) bitfield_get_field(reg1, instr);
 
             args.reg_3.ra =
-                (reg3_t) bitfield_get_field(reg2, instr);
+                    (reg3_t) bitfield_get_field(reg2, instr);
 
             args.reg_3.rb =
-                (reg3_t) bitfield_get_field(reg3, instr);
+                    (reg3_t) bitfield_get_field(reg3, instr);
 
             break;
 
         case REG_FORMAT_BR:
             args.br.cc =
-                (cc_t) bitfield_get_field(cc, instr);
+                    (cc_t) bitfield_get_field(cc, instr);
 
             args.br.pc_offset =
-                (offset9_t) bitfield_get_field_signed(offset9, instr);
+                    (offset9_t) bitfield_get_field_signed(offset9, instr);
 
             break;
 
         case REG_FORMAT_TRAP:
             args.trap.vector =
-                (trap_vector_t) bitfield_get_field(trap, instr);
+                    (trap_vector_t) bitfield_get_field(trap, instr);
 
             break;
 
         case REG_FORMAT_JSR:
             args.jsr.pc_offset =
-                (offset11_t) bitfield_get_field(offset11, instr);
+                    (offset11_t) bitfield_get_field(offset11, instr);
 
             break;
 
         case REG_FORMAT_REG_1:
             args.reg_1.rq =
-                (reg3_t) bitfield_get_field(reg2, instr);
+                    (reg3_t) bitfield_get_field(reg2, instr);
 
             break;
 
@@ -783,20 +967,6 @@ reg_args_t instr_get_args(const instr_t instr)
     }
 
     return args;
-}
-
-
-instr_t instr_decode(word_t mem)
-{
-    instr_t instr = EMPTY_INSTR;
-
-    instr.raw = mem;
-    instr.opcode = instr_get_opcode(instr);
-    instr.format = instr_get_format(instr);
-    instr.args = instr_get_args(instr);
-    instr.mnemonic = instr_get_mnemonic(instr);
-
-    return instr;
 }
 
 // Prints its mnemonic form.
@@ -863,205 +1033,45 @@ void instr_print(instr_t instr)
     }
 }
 
-// Read a simulator command from the keyboard (q, h, ?, d, number,
-// or empty line) and execute it.
-// Return true if the execution should continue, false otherwise.
-//
-bool read_command_execute(cpu_t *cpu)
+
+/* bitfield_t functions */
+
+bitfield_t bitfield_create(uint8_t pos, uint8_t len)
 {
-    // Buffer to read next command line into
-#define LINE_BUF_LEN 80
-    char line[LINE_BUF_LEN];
+    bitfield_t bitfield = {
+        .pos = pos,
+        .len = len,
+        .mask = (uint16_t) BITMASK_FIELD(pos, len)
+    };
 
-    char *result = fgets(line, LINE_BUF_LEN, stdin);
-    if (result == NULL) {
-        printf("info: reached end-of-file on input. exiting...\n");
-        return false;
-    }
-
-    int matches;
-    char c;
-    matches = sscanf(line, "%c", &c);
-    if (matches == 1) {
-        bool will_continue = true;
-        if (cpu_execute_command(cpu, c, &will_continue)) {
-            return will_continue;
-        }
-    }
-
-    int n;
-    matches = sscanf(line, "%d", &n);
-    if (matches == 1) {
-        cpu_step_n(cpu, n);
-        return true;
-    }
-
-    print_invalid_command();
-    return true;
+    return bitfield;
 }
 
-// Execute a nonnumeric command; complain if it's not 'h', '?',
-// 'd', 'q' or '\n'.
-//
-// Return `true` if command is valid.
-//
-// `*will_continue` is set to `true` when the cpu will continue execution,
-// other wise false
-//
-bool cpu_execute_command(cpu_t *cpu, const char c, bool *will_continue)
+uint16_t bitfield_get_field(const bitfield_t field, const instr_t instr)
 {
-    bool is_valid;
-
-    switch (c) {
-        case 'q':
-            printf("info: entered quit command. exiting...\n");
-            *will_continue = false;
-            is_valid = true;
-            break;
-
-        case 'h':
-        case '?':
-            print_help();
-            *will_continue = true;
-            is_valid = true;
-            break;
-
-        case 'd':
-            cpu_dump(cpu);
-            *will_continue = true;
-            is_valid = true;
-            break;
-
-        case 'r':
-            cpu_dump_registers(cpu);
-            *will_continue = true;
-            is_valid = true;
-            break;
-
-        case 'm':
-            cpu_dump_memory(cpu);
-            *will_continue = true;
-            is_valid = true;
-            break;
-
-        case '\n':
-            printf("info: stepping 1 cycle\n");
-            cpu_step_n(cpu, 1);
-            *will_continue = true;
-            is_valid = true;
-            break;
-
-        default:
-            *will_continue = true;
-            is_valid = false;
-            break;
-    }
-
-    return is_valid;
+    return ((instr.raw & field.mask) >> field.pos);
 }
 
-// Print out message saying that the command was invalid
-//
-void print_invalid_command(void)
+/**
+ * Resizes a signed 2s-complement bitstring to `int16_t`
+ * @param raw   the raw bitstring of n-bits
+ * @param mask  the mask for the bitstring
+ * @param len   the length of the bitstring in bits
+ *
+ * @return the resized signed bitstring to `int16_t
+ */
+int16_t bitfield_get_field_signed(const bitfield_t field, const instr_t instr)
 {
-    printf(
-        "error: invalid command. expected 'h', '?', 'd', 'q', '\\n', or integer >= 1\n");
-}
+    const uint16_t raw = bitfield_get_field(field, instr);
 
-// Print standard message for simulator help command ('h' or '?')
-//
-void print_help(void)
-{
-    printf(
-        "      h   print out this help message\n"
-        "      ?   print out this help message\n"
-        "      d   dump cpu registers and memory\n"
-        "      r   dump cpu registers\n"
-        "      m   dump cpu memory\n"
-        "<enter>   execute 1 instruction cycle\n"
-        "   1..n   execute N instructions cycles\n"
-    );
-}
+    int16_t result = 0;
+    const uint32_t mask = field.mask;
 
-// Execute a number of instruction cycles.  Exceptions: If the
-// number of cycles is <= 0, complain and return; if the cpu_t is
-// not running, say so and return; if the number of cycles is
-// insanely large, warn the user and substitute a saner limit.
-//
-// If, as we execute the many cycles, the cpu_t stops running,
-// stop and return.
-//
-void cpu_step_n(cpu_t *cpu, const int32_t num_cycles)
-{
-    if (num_cycles <= 0) {
-        printf("error: number of cycles must be > 0\n");
-        return;
+    if (SIGN_N(raw, field.len) == NEGATIVE_SIGN_BIT) {
+        result = (int16_t) ((UINT32_MAX & ~mask) | raw);
+    } else {
+        result = raw;
     }
 
-    const int max_cycles = 100;
-    if (num_cycles > max_cycles) {
-        printf("warn: number of cycles too large. defaulting to %d cycles.",
-            max_cycles);
-    }
-
-    if (!cpu->is_running) {
-        printf("info: cpu has halted. ignoring.\n");
-        return;
-    }
-
-    for (int32_t n = num_cycles; n > 0; n--) {
-        cpu_step(cpu);
-        if (!cpu->is_running) return;
-    }
-}
-
-bool cpu_check_sanity(cpu_t *cpu)
-{
-    // TODO: FP2
-    return true;
-}
-
-// Execute one instruction cycle
-//
-void cpu_step(cpu_t *cpu)
-{
-    printf("warn: execution not implemented in Phase 1...\n");
-    return;
-
-    /*
-
-    if (!cpu->is_running) {
-        printf("info: cpu has halted. ignoring.\n");
-        return;
-    }
-
-    if (!cpu_check_sanity(cpu)) return;
-
-    const address_t addr = cpu->pc;
-    cpu->ir = cpu->mem[cpu->pc];
-    (cpu->pc)++;
-
-    const instr_t instr = instr_decode(cpu->ir);
-    cpu->instr = instr;
-
-    mem_println_with_addr(cpu->ir, addr);
-
-    const uint8_t opcode = (cpu->instr).opcode;
-    switch (opcode) {
-        // TODO: FP2
-        default:
-            printf("warn: bad opcode '%d'. ignoring.\n", opcode);
-    }
-
-    if (!cpu_check_sanity(cpu)) return;
-
-    */
-}
-
-// Execute the halt instruction (make cpu_t stop running)
-//
-void cpu_halt(cpu_t *cpu)
-{
-    printf("info: halting execution\n");
-    cpu->is_running = 0;
+    return result;
 }
