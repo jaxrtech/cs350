@@ -104,8 +104,8 @@ typedef enum {
     TRAP_OUT   = UINT8_C(0x21),
     TRAP_PUTS  = UINT8_C(0x22),
     TRAP_IN    = UINT8_C(0x23),
-    TRAP_HALT  = UINT8_C(0x23),
-    TRAP_PUTSP = UINT8_C(0x20)
+    TRAP_HALT  = UINT8_C(0x25),
+    TRAP_PUTSP = UINT8_C(0x24)
 } trap_vector_t;
 
 
@@ -212,7 +212,7 @@ typedef enum {
 // An interpreted instruction.
 typedef struct {
     word_t raw;
-    char *mnemonic;
+    const char *mnemonic;
     uint8_t opcode; // 4 bits
     reg_format_t format;
     reg_args_t args;
@@ -285,8 +285,10 @@ void cpu_dump_memory(cpu_t *cpu);
 void cpu_dump_registers(cpu_t *cpu);
 
 void cpu_step(cpu_t *cpu);
+void cpu_execute(cpu_t *cpu);
 void cpu_step_n(cpu_t *cpu, const int32_t num_cycles);
 void cpu_halt(cpu_t *cpu);
+void cpu_execute_trap(cpu_t *cpu, const trap_vector_t vector);
 
 /* word_t functions */
 void mem_print(const word_t mem);
@@ -298,12 +300,16 @@ opcode_t instr_decode_opcode(instr_t instr);
 reg_format_t instr_decode_format(const instr_t instr);
 const char *instr_decode_mnemonic(const instr_t instr);
 reg_args_t instr_decode_args(const instr_t instr);
+
+uint16_t instr_get_bitfield(const instr_t instr, const bitfield_t field);
+int16_t instr_get_bitfield_signed(const instr_t instr, const bitfield_t field);
+
 void instr_print(instr_t  instr);
 
 /* bitfield_t functions */
 const bitfield_t bitfield_create(uint8_t pos, uint8_t len);
-uint16_t bitfield_get_field(const bitfield_t field, const instr_t instr);
-int16_t bitfield_get_field_signed(const bitfield_t field, const instr_t instr);
+uint16_t bitfield_read(const bitfield_t field, const uint16_t x);
+int16_t bitfield_read_signed(const bitfield_t field, const uint16_t x);
 
 
 /* function implementations */
@@ -579,7 +585,7 @@ void cpu_get_cc_str(cpu_t *cpu, char buffer[CC_STR_LEN])
         buffer[i] = 'Z'; i++;
     }
     if ((cc & CC_POSITIVE) != 0) {
-        buffer[i] = 'P'; i++;
+        buffer[i] = 'P';
     }
 }
 
@@ -690,17 +696,10 @@ void cpu_dump_registers(cpu_t *cpu)
  */
 void cpu_step(cpu_t *cpu)
 {
-    printf("warn: execution not implemented in Phase 1...\n");
-    return;
-
-    /*
-
     if (!cpu->is_running) {
         printf("info: cpu has halted. ignoring.\n");
         return;
     }
-
-    if (!cpu_check_sanity(cpu)) return;
 
     const address_t addr = cpu->pc;
     cpu->ir = cpu->mem[cpu->pc];
@@ -710,17 +709,269 @@ void cpu_step(cpu_t *cpu)
     cpu->instr = instr;
 
     mem_println_with_addr(cpu->ir, addr);
+    cpu_execute(cpu);
+}
 
-    const uint8_t opcode = (cpu->instr).opcode;
-    switch (opcode) {
-        // TODO: FP2
-        default:
-            printf("warn: bad opcode '%d'. ignoring.\n", opcode);
+/**
+ * Reports that a bad register format was encourtered
+ * @param cpu     the `cpu_t` context
+ * @param format  the register format that was expected
+ * @return
+ */
+void cpu_bad_format(const cpu_t *cpu, const reg_format_t format)
+{
+    fprintf(stderr, "error: invalid instruction format (#%d) for (%s) %x\n",
+            cpu->instr.format, cpu->instr.mnemonic, cpu->instr.raw);
+
+    if ((cpu->instr).format == format) {
+        fprintf(stderr, "fatal: instruction has correct format (#%d) but was unhandled\n",
+                cpu->instr.format);
+        exit(1);
+    }
+}
+
+/**
+ * Gets the control condition from the value.
+ * @param x  the value
+ * @return the control condition
+ */
+cc_t cc_from_value(const word_t x)
+{
+    cc_t cc = CC_NONE;
+
+    if (x > 0) {
+        cc |= CC_POSITIVE;
+    }
+    if (x == 0) {
+        cc |= CC_ZERO;
+    }
+    if (x < 0) {
+        cc |= CC_NEGATIVE;
     }
 
-    if (!cpu_check_sanity(cpu)) return;
+    return cc;
+}
 
-    */
+void cpu_update_cc(cpu_t *cpu, const word_t value)
+{
+    cpu->cc = cc_from_value(value);
+}
+
+/**
+ * Executes the current instruction in `cpu->instr`
+ * @param cpu  the `cpu_t` context
+ */
+void cpu_execute(cpu_t *cpu) {
+    const instr_t instr = cpu->instr;
+    const address_t pc = cpu->pc;
+    
+    switch (instr.format) {
+        case REG_FORMAT_PC_OFFSET: {
+            const reg3_t rn = instr.args.pc_offset.rn;
+            const offset9_t offset = instr.args.pc_offset.offset;
+            const address_t addr = pc + offset;
+
+            switch (instr.opcode) {
+                case OPCODE_LD:
+                    cpu->reg[rn] = cpu->mem[addr];
+                    cpu->cc = cc_from_value(cpu->reg[rn]);
+                    break;
+                case OPCODE_ST:  cpu->mem[addr] = cpu->reg[rn]; break;
+                case OPCODE_LDI: cpu->reg[rn] = cpu->mem[cpu->mem[addr]]; break;
+                case OPCODE_LEA: cpu->reg[rn] = addr; break;
+                case OPCODE_STI: cpu->mem[cpu->mem[addr]] = cpu->reg[rn]; break;
+                default: cpu_bad_format(cpu, REG_FORMAT_PC_OFFSET); break;
+            }
+
+            break;
+        }
+
+        case REG_FORMAT_BASE_OFFSET: {
+            const reg3_t rn = instr.args.base_offset.rn;
+            const reg3_t rb = instr.args.base_offset.rb;
+            const offset6_t offset = instr.args.base_offset.offset;
+            const address_t addr = (const address_t) (cpu->reg[rb] + offset);
+
+            switch (instr.opcode) {
+                case OPCODE_LDR: cpu->reg[rn] = cpu->mem[addr]; break;
+                case OPCODE_STR: cpu->mem[addr] = cpu->reg[rn]; break;
+                default: cpu_bad_format(cpu, REG_FORMAT_BASE_OFFSET); break;
+            }
+
+            break;
+        }
+
+        case REG_FORMAT_REG_2: {
+            const reg3_t rc = instr.args.reg_2.rn;
+            const reg3_t ra = instr.args.reg_2.ra;
+
+            switch (instr.opcode) {
+                case OPCODE_NOT: cpu->reg[rc] = ~cpu->mem[ra]; break;
+                default: cpu_bad_format(cpu, REG_FORMAT_REG_2); break;
+            }
+
+            break;
+        }
+
+        case REG_FORMAT_REG_3: {
+            const reg3_t rc = instr.args.reg_3.rc;
+            const reg3_t ra = instr.args.reg_3.ra;
+            const reg3_t rb = instr.args.reg_3.rb;
+
+            switch (instr.opcode) {
+                case OPCODE_ADD: cpu->reg[rc] += cpu->reg[ra] + cpu->reg[rb]; break;
+                case OPCODE_AND: cpu->reg[rc] = cpu->reg[ra] & cpu->reg[rb]; break;
+                default: cpu_bad_format(cpu, REG_FORMAT_REG_3); break;
+            }
+
+            break;
+        }
+
+        case REG_FORMAT_REG_2_IMM: {
+            const reg3_t rc = instr.args.reg_2_imm.rn;
+            const reg3_t ra = instr.args.reg_2_imm.ra;
+            const int5_t imm = instr.args.reg_2_imm.imm;
+
+            switch (instr.opcode) {
+                case OPCODE_ADD: cpu->reg[rc] += cpu->reg[ra] + imm; break;
+                case OPCODE_AND: cpu->reg[rc] = cpu->reg[ra] & imm; break;
+                default: cpu_bad_format(cpu, REG_FORMAT_REG_2_IMM); break;
+            }
+
+            break;
+        }
+
+        case REG_FORMAT_BR: {
+            const cc_t mask = instr.args.br.cc;
+            const offset9_t offset = instr.args.br.pc_offset;
+            const address_t pcx = pc + offset;
+
+            switch (instr.opcode) {
+                case OPCODE_BR:
+                    if ((mask & cpu->cc) != 0) {
+                        cpu->pc = pcx;
+                    }
+                    break;
+
+                default:
+                    cpu_bad_format(cpu, REG_FORMAT_BR);
+                    break;
+            }
+
+            break;
+        }
+
+        case REG_FORMAT_JSR: {
+            const offset11_t offset = instr.args.jsr.pc_offset;
+            const address_t pcx = pc + offset;
+
+            switch (instr.opcode) {
+                case OPCODE_JSR: cpu->reg[7] = pc; cpu->pc = pcx; break;
+                default: cpu_bad_format(cpu, REG_FORMAT_JSR); break;
+            }
+
+            break;
+        }
+
+        case REG_FORMAT_REG_1: {
+            const reg3_t rq = instr.args.reg_1.rq;
+
+            switch (instr.opcode) {
+                // JSR and JSRR have the same opcode but different reg format,
+                // so this really is "OPCODE_JSRR" so to speak
+                case OPCODE_JSR: {
+                    const word_t a = cpu->reg[rq];
+                    cpu->reg[7] = pc;
+                    cpu->pc = (address_t) a;
+                    break;
+                }
+
+                case OPCODE_JMP: cpu->pc = (address_t) cpu->reg[rq]; break;
+
+                default: cpu_bad_format(cpu, REG_FORMAT_REG_1); break;
+            }
+
+            break;
+        }
+
+        case REG_FORMAT_TRAP: {
+            const trap_vector_t vector = instr.args.trap.vector;
+
+            switch (instr.opcode) {
+                case OPCODE_TRAP: cpu_execute_trap(cpu, vector); break;
+                default: cpu_bad_format(cpu, REG_FORMAT_TRAP); break;
+            }
+
+            break;
+        }
+
+        default:
+            printf("warn: bad opcode '%d'. ignoring.\n", instr.opcode);
+            break;
+    }
+}
+
+void cpu_execute_trap(cpu_t *cpu, const trap_vector_t vector) {
+    const bitfield_t lo = bitfield_create(0, 8);
+    const bitfield_t hi = bitfield_create(8, 8);
+
+    switch (vector) {
+        case TRAP_GETC: {
+            printf("in> ");
+            const const uint8_t raw = (const uint8_t) getchar();
+            const char c = (const char) bitfield_read(lo, raw);
+            cpu->reg[0] = c;
+            break;
+        }
+
+        case TRAP_OUT: {
+            const const uint8_t raw = (const uint8_t) cpu->reg[0];
+            const char c = (const char) bitfield_read(lo, raw);
+            printf("out> %c\n", c);
+            break;
+        }
+
+        case TRAP_PUTS: {
+            printf("out> ");
+            address_t ptr = (address_t) cpu->reg[0];
+            while (cpu->mem[ptr] != '\0') {
+                const const uint16_t raw = (const uint16_t) cpu->mem[ptr];
+                const char c = (const char) bitfield_read(lo, raw);
+                putchar(c);
+                ptr++;
+            }
+            printf("\n");
+            break;
+        }
+
+        case TRAP_PUTSP: {
+            printf("out> ");
+            address_t ptr = (address_t) cpu->reg[0];
+            while (cpu->mem[ptr] != '\0') {
+                const const uint16_t raw = (const uint16_t) cpu->mem[ptr];
+                const char clo = (const char) bitfield_read(lo, raw);
+                const char chi = (const char) bitfield_read(hi, raw);
+                putchar(clo);
+                putchar(chi);
+                ptr++;
+            }
+            printf("\n");
+            break;
+        }
+
+        case TRAP_IN:
+            // TODO: ?
+            break;
+
+        case TRAP_HALT:
+            cpu_halt(cpu);
+            break;
+
+        default:
+            fprintf(stderr, "error: invalid trap vector 0x%x\n",
+                    vector);
+            break;
+    }
 }
 
 /**
@@ -985,83 +1236,83 @@ reg_args_t instr_decode_args(const instr_t instr)
     switch (instr.format) {
         case REG_FORMAT_PC_OFFSET: {
             args.pc_offset.rn =
-                    (reg3_t) bitfield_get_field(reg1, instr);
+                    (reg3_t) instr_get_bitfield(instr, reg1);
 
             args.pc_offset.offset =
-                    (offset9_t) bitfield_get_field_signed(offset9, instr);
+                    (offset9_t) instr_get_bitfield_signed(instr, offset9);
 
             break;
         }
 
         case REG_FORMAT_BASE_OFFSET:
             args.base_offset.rn =
-                    (reg3_t) bitfield_get_field(reg1, instr);
+                    (reg3_t) instr_get_bitfield(instr, reg1);
 
             args.base_offset.rb =
-                    (reg3_t) bitfield_get_field(reg2, instr);
+                    (reg3_t) instr_get_bitfield(instr, reg2);
 
             args.base_offset.offset =
-                    (offset6_t) bitfield_get_field_signed(offset6, instr);
+                    (offset6_t) instr_get_bitfield_signed(instr, offset6);
 
             break;
 
         case REG_FORMAT_REG_2:
             args.reg_2.rn =
-                    (reg3_t) bitfield_get_field(reg1, instr);
+                    (reg3_t) instr_get_bitfield(instr, reg1);
 
             args.reg_2.ra =
-                    (reg3_t) bitfield_get_field(reg2, instr);
+                    (reg3_t) instr_get_bitfield(instr, reg2);
 
             break;
 
         case REG_FORMAT_REG_2_IMM:
             args.reg_2_imm.rn =
-                    (reg3_t) bitfield_get_field(reg1, instr);
+                    (reg3_t) instr_get_bitfield(instr, reg1);
 
             args.reg_2_imm.ra =
-                    (reg3_t) bitfield_get_field(reg1, instr);
+                    (reg3_t) instr_get_bitfield(instr, reg1);
 
             args.reg_2_imm.imm =
-                    (uint8_t) bitfield_get_field_signed(imm5, instr);
+                    (uint8_t) instr_get_bitfield_signed(instr, imm5);
 
             break;
 
         case REG_FORMAT_REG_3:
             args.reg_3.rc =
-                    (reg3_t) bitfield_get_field(reg1, instr);
+                    (reg3_t) instr_get_bitfield(instr, reg1);
 
             args.reg_3.ra =
-                    (reg3_t) bitfield_get_field(reg2, instr);
+                    (reg3_t) instr_get_bitfield(instr, reg2);
 
             args.reg_3.rb =
-                    (reg3_t) bitfield_get_field(reg3, instr);
+                    (reg3_t) instr_get_bitfield(instr, reg3);
 
             break;
 
         case REG_FORMAT_BR:
             args.br.cc =
-                    (cc_t) bitfield_get_field(cc, instr);
+                    (cc_t) instr_get_bitfield(instr, cc);
 
             args.br.pc_offset =
-                    (offset9_t) bitfield_get_field_signed(offset9, instr);
+                    (offset9_t) instr_get_bitfield_signed(instr, offset9);
 
             break;
 
         case REG_FORMAT_TRAP:
             args.trap.vector =
-                    (trap_vector_t) bitfield_get_field(trap, instr);
+                    (trap_vector_t) instr_get_bitfield(instr, trap);
 
             break;
 
         case REG_FORMAT_JSR:
             args.jsr.pc_offset =
-                    (offset11_t) bitfield_get_field(offset11, instr);
+                    (offset11_t) instr_get_bitfield(instr, offset11);
 
             break;
 
         case REG_FORMAT_REG_1:
             args.reg_1.rq =
-                    (reg3_t) bitfield_get_field(reg2, instr);
+                    (reg3_t) instr_get_bitfield(instr, reg2);
 
             break;
 
@@ -1143,6 +1394,31 @@ void instr_print(instr_t instr)
     }
 }
 
+/**
+ * Get an unsigned bitfield from a raw instruction
+ * @param field   the bitfield to get
+ * @param instr   the instruction
+ * @return  the raw value of the bitfield
+ */
+uint16_t instr_get_bitfield(const instr_t instr, const bitfield_t field)
+{
+    return bitfield_read(field, (const uint16_t) instr.raw);
+}
+
+/**
+ * Get an signed, 2's-complement bitfield from the raw instruction resized to
+ * an `int16_t`
+ *
+ * @param raw   the raw bitstring of n-bits
+ * @param mask  the mask for the bitstring
+ * @param len   the length of the bitstring in bits
+ *
+ * @return the signed bitstring to resized to a `int16_t`
+ */
+int16_t instr_get_bitfield_signed(const instr_t instr, const bitfield_t field)
+{
+    return bitfield_read_signed(field, (const uint16_t) instr.raw);
+}
 
 /* bitfield_t functions */
 
@@ -1163,30 +1439,14 @@ const bitfield_t bitfield_create(uint8_t pos, uint8_t len)
     return bitfield;
 }
 
-/**
- * Get an unsigned bitfield from a raw instruction
- * @param field   the bitfield to get
- * @param instr   the instruction
- * @return  the raw value of the bitfield
- */
-uint16_t bitfield_get_field(const bitfield_t field, const instr_t instr)
+uint16_t bitfield_read(const bitfield_t field, const uint16_t x)
 {
-    return ((instr.raw & field.mask) >> field.pos);
+    return ((x & field.mask) >> field.pos);
 }
 
-/**
- * Get an signed, 2's-complement bitfield from the raw instruction resized to
- * an `int16_t`
- *
- * @param raw   the raw bitstring of n-bits
- * @param mask  the mask for the bitstring
- * @param len   the length of the bitstring in bits
- *
- * @return the signed bitstring to resized to a `int16_t`
- */
-int16_t bitfield_get_field_signed(const bitfield_t field, const instr_t instr)
+int16_t bitfield_read_signed(const bitfield_t field, const uint16_t x)
 {
-    const uint16_t raw = bitfield_get_field(field, instr);
+    const uint16_t raw = bitfield_read(field, x);
 
     int16_t result = 0;
     const uint32_t mask = field.mask;
@@ -1199,3 +1459,4 @@ int16_t bitfield_get_field_signed(const bitfield_t field, const instr_t instr)
 
     return result;
 }
+
