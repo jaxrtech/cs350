@@ -216,6 +216,7 @@ typedef struct {
     uint8_t opcode; // 4 bits
     reg_format_t format;
     reg_args_t args;
+    bool will_set_cc;
 } instr_t;
 
 
@@ -225,6 +226,7 @@ const instr_t EMPTY_INSTR = {
     .opcode = 0,
     .format = REG_FORMAT_UNKNOWN,
     .args.invalid = 0,
+    .will_set_cc = false
 };
 
 
@@ -297,6 +299,7 @@ void mem_println_with_addr(const word_t mem, const address_t address);
 /* instr_t functions */
 instr_t instr_decode(word_t mem);
 opcode_t instr_decode_opcode(instr_t instr);
+const bool instr_decode_will_set_cc(const instr_t instr);
 reg_format_t instr_decode_format(const instr_t instr);
 const char *instr_decode_mnemonic(const instr_t instr);
 reg_args_t instr_decode_args(const instr_t instr);
@@ -316,9 +319,9 @@ int16_t bitfield_read_signed(const bitfield_t field, const uint16_t x);
 
 int main(int argc, char *argv[])
 {
-    printf("LC-3 Simulator (Final Project - Phase 1)\n");
+    printf("LC-3 Simulator (Final Project - Phase 2)\n");
     printf("CS 350 Lab 6\n");
-    printf("Josh Bowden & Huzair Kalia - Section L03\n");
+    printf("Josh Bowden - Section L03\n");
     printf("~~~\n");
 
     FILE *input_file = open_input_file(argc, argv);
@@ -671,14 +674,14 @@ void cpu_dump_registers(cpu_t *cpu)
     printf("CONTROL UNIT:\n");
     printf("PC: x%04X", cpu->pc);
     printf("%*c", spaces, ' ');
-    printf("IR: x%04X", cpu->ir);
+    printf("IR: x%04X", (uword_t) cpu->ir);
     printf("%*c", spaces, ' ');
     printf("CC: %-3s", cc_str);
     printf("%*c", spaces+2, ' ');
     printf("RUNNING: %1d\n", cpu->is_running);
 
     for (int i = 0; i < CPU_NUM_REGISTERS; i++) {
-        int x = cpu->reg[i];
+        const uword_t x = cpu->reg[i];
         printf("R%d: x%04X  %-6d", i, x, x);
 
         const bool is_end_of_row = (i + 1) % cols == 0;
@@ -737,16 +740,14 @@ void cpu_bad_format(const cpu_t *cpu, const reg_format_t format)
  */
 cc_t cc_from_value(const word_t x)
 {
-    cc_t cc = CC_NONE;
+    cc_t cc;
 
     if (x > 0) {
-        cc |= CC_POSITIVE;
-    }
-    if (x == 0) {
-        cc |= CC_ZERO;
-    }
-    if (x < 0) {
-        cc |= CC_NEGATIVE;
+        cc = CC_POSITIVE;
+    } else if (x < 0) {
+        cc = CC_NEGATIVE;
+    } else {
+        cc = CC_ZERO;
     }
 
     return cc;
@@ -764,7 +765,10 @@ void cpu_update_cc(cpu_t *cpu, const word_t value)
 void cpu_execute(cpu_t *cpu) {
     const instr_t instr = cpu->instr;
     const address_t pc = cpu->pc;
-    
+
+    // Used for updating condition code if applicable to opcode
+    word_t ccx = 0;
+
     switch (instr.format) {
         case REG_FORMAT_PC_OFFSET: {
             const reg3_t rn = instr.args.pc_offset.rn;
@@ -772,14 +776,11 @@ void cpu_execute(cpu_t *cpu) {
             const address_t addr = pc + offset;
 
             switch (instr.opcode) {
-                case OPCODE_LD:
-                    cpu->reg[rn] = cpu->mem[addr];
-                    cpu->cc = cc_from_value(cpu->reg[rn]);
-                    break;
-                case OPCODE_ST:  cpu->mem[addr] = cpu->reg[rn]; break;
-                case OPCODE_LDI: cpu->reg[rn] = cpu->mem[cpu->mem[addr]]; break;
-                case OPCODE_LEA: cpu->reg[rn] = addr; break;
-                case OPCODE_STI: cpu->mem[cpu->mem[addr]] = cpu->reg[rn]; break;
+                case OPCODE_LD:  ccx = cpu->reg[rn] = cpu->mem[addr]; break;
+                case OPCODE_LDI: ccx = cpu->reg[rn] = cpu->mem[cpu->mem[addr]]; break;
+                case OPCODE_LEA: ccx = cpu->reg[rn] = addr; break;
+                case OPCODE_ST:        cpu->mem[addr] = cpu->reg[rn]; break;
+                case OPCODE_STI:       cpu->mem[cpu->mem[addr]] = cpu->reg[rn]; break;
                 default: cpu_bad_format(cpu, REG_FORMAT_PC_OFFSET); break;
             }
 
@@ -793,8 +794,8 @@ void cpu_execute(cpu_t *cpu) {
             const address_t addr = (const address_t) (cpu->reg[rb] + offset);
 
             switch (instr.opcode) {
-                case OPCODE_LDR: cpu->reg[rn] = cpu->mem[addr]; break;
-                case OPCODE_STR: cpu->mem[addr] = cpu->reg[rn]; break;
+                case OPCODE_LDR: ccx = cpu->reg[rn] = cpu->mem[addr]; break;
+                case OPCODE_STR:       cpu->mem[addr] = cpu->reg[rn]; break;
                 default: cpu_bad_format(cpu, REG_FORMAT_BASE_OFFSET); break;
             }
 
@@ -806,7 +807,7 @@ void cpu_execute(cpu_t *cpu) {
             const reg3_t ra = instr.args.reg_2.ra;
 
             switch (instr.opcode) {
-                case OPCODE_NOT: cpu->reg[rc] = ~cpu->mem[ra]; break;
+                case OPCODE_NOT: ccx = cpu->reg[rc] = ~cpu->mem[ra]; break;
                 default: cpu_bad_format(cpu, REG_FORMAT_REG_2); break;
             }
 
@@ -819,8 +820,8 @@ void cpu_execute(cpu_t *cpu) {
             const reg3_t rb = instr.args.reg_3.rb;
 
             switch (instr.opcode) {
-                case OPCODE_ADD: cpu->reg[rc] += cpu->reg[ra] + cpu->reg[rb]; break;
-                case OPCODE_AND: cpu->reg[rc] = cpu->reg[ra] & cpu->reg[rb]; break;
+                case OPCODE_ADD: ccx = cpu->reg[rc] += cpu->reg[ra] + cpu->reg[rb]; break;
+                case OPCODE_AND: ccx = cpu->reg[rc] = cpu->reg[ra] & cpu->reg[rb]; break;
                 default: cpu_bad_format(cpu, REG_FORMAT_REG_3); break;
             }
 
@@ -833,8 +834,8 @@ void cpu_execute(cpu_t *cpu) {
             const int5_t imm = instr.args.reg_2_imm.imm;
 
             switch (instr.opcode) {
-                case OPCODE_ADD: cpu->reg[rc] += cpu->reg[ra] + imm; break;
-                case OPCODE_AND: cpu->reg[rc] = cpu->reg[ra] & imm; break;
+                case OPCODE_ADD: ccx = cpu->reg[rc] += cpu->reg[ra] + imm; break;
+                case OPCODE_AND: ccx = cpu->reg[rc] = cpu->reg[ra] & imm; break;
                 default: cpu_bad_format(cpu, REG_FORMAT_REG_2_IMM); break;
             }
 
@@ -887,7 +888,6 @@ void cpu_execute(cpu_t *cpu) {
                 }
 
                 case OPCODE_JMP: cpu->pc = (address_t) cpu->reg[rq]; break;
-
                 default: cpu_bad_format(cpu, REG_FORMAT_REG_1); break;
             }
 
@@ -909,6 +909,10 @@ void cpu_execute(cpu_t *cpu) {
             printf("warn: bad opcode '%d'. ignoring.\n", instr.opcode);
             break;
     }
+
+    if (instr.will_set_cc) {
+        cpu_update_cc(cpu, ccx);
+    }
 }
 
 void cpu_execute_trap(cpu_t *cpu, const trap_vector_t vector) {
@@ -916,8 +920,10 @@ void cpu_execute_trap(cpu_t *cpu, const trap_vector_t vector) {
     const bitfield_t hi = bitfield_create(8, 8);
 
     switch (vector) {
+        case TRAP_IN:
+            printf("input> ");
+
         case TRAP_GETC: {
-            printf("in> ");
             const const uint8_t raw = (const uint8_t) getchar();
             const char c = (const char) bitfield_read(lo, raw);
             cpu->reg[0] = c;
@@ -927,12 +933,11 @@ void cpu_execute_trap(cpu_t *cpu, const trap_vector_t vector) {
         case TRAP_OUT: {
             const const uint8_t raw = (const uint8_t) cpu->reg[0];
             const char c = (const char) bitfield_read(lo, raw);
-            printf("out> %c\n", c);
+            printf("%c\n", c);
             break;
         }
 
         case TRAP_PUTS: {
-            printf("out> ");
             address_t ptr = (address_t) cpu->reg[0];
             while (cpu->mem[ptr] != '\0') {
                 const const uint16_t raw = (const uint16_t) cpu->mem[ptr];
@@ -945,7 +950,6 @@ void cpu_execute_trap(cpu_t *cpu, const trap_vector_t vector) {
         }
 
         case TRAP_PUTSP: {
-            printf("out> ");
             address_t ptr = (address_t) cpu->reg[0];
             while (cpu->mem[ptr] != '\0') {
                 const const uint16_t raw = (const uint16_t) cpu->mem[ptr];
@@ -958,10 +962,6 @@ void cpu_execute_trap(cpu_t *cpu, const trap_vector_t vector) {
             printf("\n");
             break;
         }
-
-        case TRAP_IN:
-            // TODO: ?
-            break;
 
         case TRAP_HALT:
             cpu_halt(cpu);
@@ -1063,6 +1063,7 @@ instr_t instr_decode(word_t mem)
 
     instr.raw = mem;
     instr.opcode = instr_decode_opcode(instr);
+    instr.will_set_cc = instr_decode_will_set_cc(instr);
     instr.format = instr_decode_format(instr);
     instr.args = instr_decode_args(instr);
     instr.mnemonic = instr_decode_mnemonic(instr);
@@ -1205,6 +1206,33 @@ const char *instr_decode_mnemonic(const instr_t instr)
             }
         }
         default: return "NOP";
+    }
+}
+
+/**
+ * @remark
+ *   Only for use during `instr_t` decoding.
+ *   Use `instr_t.will_set_cc` once decoded.
+ *
+ * Determines whether the instruction is one that will update the condition code
+ *
+ * @param instr  the `instr` to decode from
+ * @return true, if the instruction will update the condition code, otherwise false
+ */
+const bool instr_decode_will_set_cc(const instr_t instr)
+{
+    switch (instr.opcode) {
+        case OPCODE_LD:
+        case OPCODE_LDI:
+        case OPCODE_LDR:
+        case OPCODE_LEA:
+        case OPCODE_ADD:
+        case OPCODE_AND:
+        case OPCODE_NOT:
+            return true;
+
+        default:
+            return false;
     }
 }
 
