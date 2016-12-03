@@ -17,7 +17,7 @@
 
 #define DEFAULT_INPUT_PATH "default.hex";
 
-#define ENABLE_SKIP_MEMORY_MESSAGES false
+#define ENABLE_SKIP_MEMORY_MESSAGES true
 
 
 /* bitstring manipulation */
@@ -31,45 +31,45 @@
 #define NEGATIVE_SIGN_BIT 0x1
 
 typedef struct {
-    /* Position of the field in the instr in bits */
+    /** Position of the field in the instr in bits */
     uint8_t pos;
 
-    /* Length of the field in the instr in bits */
+    /** Length of the field in the instr in bits */
     uint8_t len;
 
-    /* Mask of the field in the instr */
+    /** Mask of the field in the instr */
     uint16_t mask;
 } bitfield_t;
 
 
 /* memory type definitions */
 
-// A word of LC-3 memory
+/** A word of LC-3 memory */
 typedef int16_t word_t;
 
-// A word of LC-3 memory
+/** A word of LC-3 memory */
 typedef uint16_t uword_t;
 
-// An address to a location in SDC memory
+/** An address to a location in SDC memory */
 typedef uint16_t address_t;
 
-// An instruction argument specifying the register number
+/** An instruction argument specifying the register number */
 typedef uint8_t reg3_t;
 
-// A signed 6-bit offset (used to represent PC-offset)
+/** A signed 6-bit offset (used to represent PC-offset) */
 typedef int8_t offset6_t;
 
-// A signed 9-bit offset (used to represent PC-offset)
+/** A signed 9-bit offset (used to represent PC-offset) */
 typedef int16_t offset9_t;
 
-// A signed 11-bit offset (used to represent PC-offset)
+/** A signed 11-bit offset (used to represent PC-offset) */
 typedef int16_t offset11_t;
 
-// A signed 5-bit integer (used to represent immediate value)
+/** A signed 5-bit integer (used to represent immediate value) */
 typedef int8_t int5_t;
 
 
-// An LC-3 instruction opcode.
+/** An LC-3 instruction opcode. */
 typedef enum {
 
     /* PC-offset instructions */
@@ -98,7 +98,7 @@ typedef enum {
 
 } opcode_t;
 
-// The trap vectors for the LC-3
+/** The trap vectors for the LC-3 */
 typedef enum {
     TRAP_GETC  = UINT8_C(0x20),
     TRAP_OUT   = UINT8_C(0x21),
@@ -109,7 +109,7 @@ typedef enum {
 } trap_vector_t;
 
 
-// A flag enum for the branch condition codes
+/** A flag enum for the branch condition codes */
 typedef enum {
     CC_NONE     = 0,
     CC_POSITIVE = 1 << 0,
@@ -121,7 +121,7 @@ typedef enum {
 
 /* instruction formats */
 
-// Length of an instruction in bits
+/** Length of an instruction in bits */
 const uint8_t instr_len = 16;
 
 typedef struct {
@@ -230,13 +230,13 @@ const instr_t EMPTY_INSTR = {
 
 /* cpu_t declaration  */
 
-// Length of SDC memory in terms `word_t`
+/** Length of SDC memory in terms `word_t` */
 #define CPU_MEMORY_LENGTH UINT16_MAX
 
-// Number of general purpose registers on the SDC
+/** Number of general purpose registers */
 #define CPU_NUM_REGISTERS 8
 
-// A representation of the state of an LC-3 cpu_t and its memory.
+/** A representation of the state of an LC-3 CPU and its memory. */
 typedef struct {
     /** origin of the program */
     address_t origin;
@@ -294,14 +294,14 @@ void mem_println_with_addr(const word_t mem, const address_t address);
 
 /* instr_t functions */
 instr_t instr_decode(word_t mem);
-opcode_t instr_get_opcode(instr_t instr);
-reg_format_t instr_get_format(const instr_t instr);
-char *instr_get_mnemonic(const instr_t instr);
-reg_args_t instr_get_args(const instr_t instr);
+opcode_t instr_decode_opcode(instr_t instr);
+reg_format_t instr_decode_format(const instr_t instr);
+const char *instr_decode_mnemonic(const instr_t instr);
+reg_args_t instr_decode_args(const instr_t instr);
 void instr_print(instr_t  instr);
 
 /* bitfield_t functions */
-bitfield_t bitfield_create(uint8_t pos, uint8_t len);
+const bitfield_t bitfield_create(uint8_t pos, uint8_t len);
 uint16_t bitfield_get_field(const bitfield_t field, const instr_t instr);
 int16_t bitfield_get_field_signed(const bitfield_t field, const instr_t instr);
 
@@ -340,8 +340,14 @@ int main(int argc, char *argv[])
     return 0;
 }
 
-// Opens the input optionally specified by command line arguments.
-// The default file path is used otherwise
+/**
+ * Opens the input optionally specified by command line arguments.
+ * The default file path is used otherwise
+ *
+ * @param argc  the number of command line args
+ * @param argv  the array of command line args
+ * @return an opened `FILE` descriptor for the input
+ */
 FILE *open_input_file(int argc, char **argv)
 {
     char *path = NULL;
@@ -363,10 +369,13 @@ FILE *open_input_file(int argc, char **argv)
     return input_file;
 }
 
-// Read a simulator command from the keyboard (q, h, ?, d, number,
-// or empty line) and execute it.
-// Return true if the execution should continue, false otherwise.
-//
+/**
+ * Read a simulator command from the keyboard (q, h, ?, d, number,
+ * or empty line) and execute it.
+ *
+ * @param cpu  the `cpu_t` context
+ * @return true, if the execution should continue, false otherwise.
+ */
 bool read_command_execute(cpu_t *cpu)
 {
     // Buffer to read next command line into
@@ -400,16 +409,18 @@ bool read_command_execute(cpu_t *cpu)
     return true;
 }
 
-// Print out message saying that the command was invalid
-//
+/**
+ * Print out message saying that the command was invalid
+ */
 void print_invalid_command(void)
 {
     printf(
             "error: invalid command. expected 'h', '?', 'd', 'q', '\\n', or integer >= 1\n");
 }
 
-// Print standard message for simulator help command ('h' or '?')
-//
+/**
+ * Print standard message for simulator help command ('h' or '?')
+ */
 void print_help(void)
 {
     printf(
@@ -426,8 +437,13 @@ void print_help(void)
 
 /* cpu_t functions */
 
-// Initializes the cpu_t by resetting all memory to zero and setting the
-// `RUNNING` flag to `1` to indicate the cpu_t is running.
+/**
+ * Initializes the `cpu_t` by:
+ *    - resetting all memory to zero
+ *    - setting the `RUNNING` flag to `1` to indicate the cpu_t is running
+ *
+ * @param cpu  the `cpu_t` context to initialize
+ */
 void cpu_init(cpu_t *cpu)
 {
     memset(cpu->reg, 0, CPU_NUM_REGISTERS * sizeof(word_t));
@@ -441,9 +457,15 @@ void cpu_init(cpu_t *cpu)
     cpu->instr = EMPTY_INSTR;
 }
 
-// Loads the cpu_t's memory from a file with a list of memory values.
-// The loading will stop when the EOF is reached or if a "setinel" value, one
-// that is outside the valid range of -9999 to 9999, is reached.
+
+/**
+ * Loads a file with a list of memory values into the memory of the `cpu_t`.
+ * The loading will stop when the EOF is reached or if a "sentinel" value, one
+ * that is outside the valid range of -9999 to 9999, is reached.
+ *
+ * @param cpu  the `cpu_t` context
+ * @param input_file  the file to load from
+ */
 void cpu_load_from_file(cpu_t *cpu, FILE *input_file)
 {
 #define DATA_BUFFER_LEN 256
@@ -475,14 +497,16 @@ void cpu_load_from_file(cpu_t *cpu, FILE *input_file)
     }
 }
 
-// Execute a nonnumeric command; complain if it's not 'h', '?',
-// 'd', 'q' or '\n'.
-//
-// Return `true` if command is valid.
-//
-// `*will_continue` is set to `true` when the cpu will continue execution,
-// other wise false
-//
+
+/**
+ * Execute a non-numeric command; complain if it's not 'h', '?', 'd', 'q' or '\n'
+ *
+ * @param cpu  the `cpu_t` context
+ * @param c    the `char` input from the user
+ * @param will_continue   dereferenced value will be set to `true` when the cpu
+ *                        will continue execution
+ * @return `true`, if command is valid, false otherwise
+ */
 bool cpu_execute_command(cpu_t *cpu, const char c, bool *will_continue)
 {
     bool is_valid;
@@ -536,6 +560,12 @@ bool cpu_execute_command(cpu_t *cpu, const char c, bool *will_continue)
 }
 
 #define CC_STR_LEN 4 // 3 chars + '\0'
+
+/**
+ * Gets the mnemonic for the current control condition of the cpu
+ * @param cpu     the `cpu_t` context
+ * @param buffer  a buffer of size `CC_STR_LEN` for the string
+ */
 void cpu_get_cc_str(cpu_t *cpu, char buffer[CC_STR_LEN])
 {
     memset(buffer, 0, CC_STR_LEN);
@@ -553,9 +583,13 @@ void cpu_get_cc_str(cpu_t *cpu, char buffer[CC_STR_LEN])
     }
 }
 
-// Prints a placeholder message to indicate that memory locations where skipped
-// since they were values of zero. The message is only shown when
-// `skip_count` > 0.
+/**
+ * Prints a placeholder message to indicate that memory locations where skipped
+ * since they were values of zero. The message is only shown when
+ * `skip_count` > 0.
+ *
+ * @param skip_count  the number of memory addresses have been skipped
+ */
 void cpu_dump_memory_print_skips(uint32_t skip_count)
 {
 #if ENABLE_SKIP_MEMORY_MESSAGES
@@ -569,7 +603,10 @@ void cpu_dump_memory_print_skips(uint32_t skip_count)
 #endif
 }
 
-// Prints the current state of the cpu_t including its registers and memory
+/**
+ * Prints the current state of the `cpu_t` including its registers and memory
+ * @param cpu  the `cpu_t` context
+ */
 void cpu_dump(cpu_t *cpu)
 {
     cpu_dump_registers(cpu);
@@ -577,11 +614,13 @@ void cpu_dump(cpu_t *cpu)
     cpu_dump_memory(cpu);
 }
 
-// cpu_dump_memory(cpu_t *cpu): For each memory address that
-// contains a non-zero value, print out a line with the
-// address, the value as an integer, and the value
-// interpreted as an instruction.
-//
+/**
+ * For each memory address that contains a non-zero value, print out a line,
+ * with the address, the value as an integer, and the value interpreted as an
+ * instruction.
+ *
+ * @param cpu  the `cpu_t` context
+ */
 void cpu_dump_memory(cpu_t *cpu)
 {
     const address_t start =
@@ -609,7 +648,11 @@ void cpu_dump_memory(cpu_t *cpu)
     cpu_dump_memory_print_skips(skip_count);
 }
 
-// Prints the current value of each register
+
+/**
+ * Prints the current value of each register
+ * @param cpu  the `cpu_t` context
+ */
 void cpu_dump_registers(cpu_t *cpu)
 {
     const int cols = 4;
@@ -641,8 +684,10 @@ void cpu_dump_registers(cpu_t *cpu)
     }
 }
 
-// Execute one instruction cycle
-//
+/**
+ * Execute one instruction cycle
+ * @param cpu  the `cpu_t`context
+ */
 void cpu_step(cpu_t *cpu)
 {
     printf("warn: execution not implemented in Phase 1...\n");
@@ -678,14 +723,19 @@ void cpu_step(cpu_t *cpu)
     */
 }
 
-// Execute a number of instruction cycles.  Exceptions: If the
-// number of cycles is <= 0, complain and return; if the cpu_t is
-// not running, say so and return; if the number of cycles is
-// insanely large, warn the user and substitute a saner limit.
-//
-// If, as we execute the many cycles, the cpu_t stops running,
-// stop and return.
-//
+/**
+ * Execute a number of instruction cycles.
+ *
+ * @remarks
+ *  - If the number of cycles is <= 0, complain and return.
+ *  - If the cpu_t is not running, say so and return.
+ *  - If the number of cycles is insanely large, warn the user and substitute a
+ *      saner limit.
+ *  - If, as we execute the many cycles, the cpu_t stops running, stop and return.
+ *
+ * @param cpu  the `cpu_t` context
+ * @param num_cycles
+ */
 void cpu_step_n(cpu_t *cpu, const int32_t num_cycles)
 {
     if (num_cycles <= 0) {
@@ -710,7 +760,10 @@ void cpu_step_n(cpu_t *cpu, const int32_t num_cycles)
     }
 }
 
-// Execute the halt instruction (make cpu_t stop running)
+/**
+ * Execute the halt instruction (make cpu_t stop running)
+ * @param cpu  the `cpu_t` context
+ */
 void cpu_halt(cpu_t *cpu)
 {
     printf("info: halting execution\n");
@@ -720,14 +773,22 @@ void cpu_halt(cpu_t *cpu)
 
 /* word_t functions */
 
-// Interprets a memory value as an instruction and prints it in mnemonic form
+/**
+ * Interprets a memory value as an instruction and prints it in mnemonic form
+ * @param mem  the `word_t` of memory
+ */
 void mem_print(const word_t mem)
 {
     instr_print(instr_decode(mem));
 }
 
-// Interprets a memory value as an instruction and prints it in formatted
-// mnemonic form next to its address
+/**
+ * Interprets a memory value as an instruction and prints it in formatted
+ * mnemonic form next to its address
+ *
+ * @param mem  the `word_t` of memory
+ * @param address  the `address_t` where `mem` is located in the cpu
+ */
 void mem_println_with_addr(const word_t mem, const address_t address)
 {
     printf("x%04X: ", address);
@@ -738,21 +799,38 @@ void mem_println_with_addr(const word_t mem, const address_t address)
 
 /* instr_t functions */
 
+/**
+ * Decodes a raw `word_t` of memory in to a structured representation of an
+ * instruction using `instr_t`
+ *
+ * @param mem  the `word_t` of memory
+ * @return the decoded `instr_t`
+ */
 instr_t instr_decode(word_t mem)
 {
     instr_t instr = EMPTY_INSTR;
 
     instr.raw = mem;
-    instr.opcode = instr_get_opcode(instr);
-    instr.format = instr_get_format(instr);
-    instr.args = instr_get_args(instr);
-    instr.mnemonic = instr_get_mnemonic(instr);
+    instr.opcode = instr_decode_opcode(instr);
+    instr.format = instr_decode_format(instr);
+    instr.args = instr_decode_args(instr);
+    instr.mnemonic = instr_decode_mnemonic(instr);
 
     return instr;
 }
 
-// Gets the opcode a memory value represents as an SDC instruction.
-opcode_t instr_get_opcode(instr_t instr)
+
+/**
+ * @remark
+ *   Only for use during `instr_t` decoding.
+ *   Use `instr_t.opcode` once decoded.
+ *
+ * Decodes the opcode from the raw memory value of the instruction
+ *
+ * @param instr  the `instr` to decode from
+ * @return the opcode
+ */
+opcode_t instr_decode_opcode(instr_t instr)
 {
     const uint8_t opcode_len = 4;
     const uint16_t opcode_mask = 0xF000;
@@ -760,8 +838,17 @@ opcode_t instr_get_opcode(instr_t instr)
     return (opcode_t) ((instr.raw & opcode_mask) >> (instr_len - opcode_len));
 }
 
-// Get the human-readable mnemonic for an opcode.
-reg_format_t instr_get_format(const instr_t instr)
+/**
+ * @remark
+ *   Only for use during `instr_t` decoding.
+ *   Use `instr_t.format` once decoded.
+ *
+ * Gets the instruction format from the raw memory value of the instruction
+ *
+ * @param instr  the `instr` to decode from
+ * @return the opcode
+ */
+reg_format_t instr_decode_format(const instr_t instr)
 {
     switch (instr.opcode) {
         case OPCODE_LD:
@@ -813,8 +900,17 @@ reg_format_t instr_get_format(const instr_t instr)
     }
 }
 
-// Get the human-readable mnemonic for an opcode.
-char *instr_get_mnemonic(const instr_t instr)
+/**
+ * @remark
+ *   Only for use during `instr_t` decoding.
+ *   Use `instr_t.mnemonic` once decoded.
+ *
+ * Decodes the opcode's mnemonic from the raw instruction
+ *
+ * @param instr  the `instr` to decode from
+ * @return the string representing the instruction's mnemonic
+ */
+const char *instr_decode_mnemonic(const instr_t instr)
 {
     switch (instr.opcode) {
         case OPCODE_LD:   return "LD";
@@ -842,7 +938,7 @@ char *instr_get_mnemonic(const instr_t instr)
 
             fprintf(
                 stderr,
-                "error: instr_get_mnemonic(): invalid branch cc\n");
+                "error: instr_decode_mnemonic(): invalid branch cc\n");
 
             exit(1);
         }
@@ -853,7 +949,7 @@ char *instr_get_mnemonic(const instr_t instr)
                 default:
                     fprintf(
                         stderr,
-                        "error: instr_get_mnemonic(): invalid jsr/jsrr\n");
+                        "error: instr_decode_mnemonic(): invalid jsr/jsrr\n");
                     exit(1);
             }
         }
@@ -861,7 +957,17 @@ char *instr_get_mnemonic(const instr_t instr)
     }
 }
 
-reg_args_t instr_get_args(const instr_t instr)
+/**
+ * @remark
+ *   Only for use during `instr_t` decoding.
+ *   Use `instr_t.args` once decoded.
+ *
+ * Decodes the instruction's argument format
+ *
+ * @param instr  the `instr` to decode from
+ * @return the instruction's argument format
+ */
+reg_args_t instr_decode_args(const instr_t instr)
 {
     const uint8_t reg_len = 3;
     const bitfield_t reg1 = bitfield_create(9, reg_len);
@@ -970,13 +1076,16 @@ reg_args_t instr_get_args(const instr_t instr)
     return args;
 }
 
-// Prints its mnemonic form.
+/**
+ * Prints instruction in mnemonic form.
+ * @param instr  the instruction
+ */
 void instr_print(instr_t instr)
 {
     printf("x%04X  ", (uword_t) instr.raw);
     printf("%*d  ", 6, instr.raw);
 
-    const char *mnemonic = instr_get_mnemonic(instr);
+    const char *mnemonic = instr_decode_mnemonic(instr);
     printf("%-4s  ", mnemonic);
 
     reg_args_t args = instr.args;
@@ -1037,7 +1146,13 @@ void instr_print(instr_t instr)
 
 /* bitfield_t functions */
 
-bitfield_t bitfield_create(uint8_t pos, uint8_t len)
+/**
+ * Creates a bitfield (a "substring" of a bitstring) represented by `bitfield_t`
+ * @param pos  the position in bits from the right of the bitfield
+ * @param len  the length in bits of the bitfield
+ * @return
+ */
+const bitfield_t bitfield_create(uint8_t pos, uint8_t len)
 {
     bitfield_t bitfield = {
         .pos = pos,
@@ -1048,18 +1163,26 @@ bitfield_t bitfield_create(uint8_t pos, uint8_t len)
     return bitfield;
 }
 
+/**
+ * Get an unsigned bitfield from a raw instruction
+ * @param field   the bitfield to get
+ * @param instr   the instruction
+ * @return  the raw value of the bitfield
+ */
 uint16_t bitfield_get_field(const bitfield_t field, const instr_t instr)
 {
     return ((instr.raw & field.mask) >> field.pos);
 }
 
 /**
- * Resizes a signed 2s-complement bitstring to `int16_t`
+ * Get an signed, 2's-complement bitfield from the raw instruction resized to
+ * an `int16_t`
+ *
  * @param raw   the raw bitstring of n-bits
  * @param mask  the mask for the bitstring
  * @param len   the length of the bitstring in bits
  *
- * @return the resized signed bitstring to `int16_t
+ * @return the signed bitstring to resized to a `int16_t`
  */
 int16_t bitfield_get_field_signed(const bitfield_t field, const instr_t instr)
 {
