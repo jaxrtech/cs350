@@ -341,9 +341,6 @@ int main(int argc, char *argv[])
     do {
         printf("%s", prompt);
         will_continue = read_command_execute(cpu);
-        if (will_continue) {
-            printf("\n");
-        }
     } while (will_continue);
 
     return 0;
@@ -423,8 +420,7 @@ bool read_command_execute(cpu_t *cpu)
  */
 void print_invalid_command(void)
 {
-    printf(
-            "error: invalid command. expected 'h', '?', 'd', 'q', '\\n', or integer >= 1\n");
+    printf("error: invalid command. expected 'h', '?', 'd', 'q', '\\n', or integer >= 1\n");
 }
 
 /**
@@ -553,7 +549,6 @@ bool cpu_execute_command(cpu_t *cpu, const char c, bool *will_continue)
             break;
 
         case '\n':
-            printf("info: stepping 1 cycle\n");
             cpu_step_n(cpu, 1);
             *will_continue = true;
             is_valid = true;
@@ -681,7 +676,7 @@ void cpu_dump_registers(cpu_t *cpu)
     printf("RUNNING: %1d\n", cpu->is_running);
 
     for (int i = 0; i < CPU_NUM_REGISTERS; i++) {
-        const uword_t x = cpu->reg[i];
+        const uword_t x = (const uword_t) cpu->reg[i];
         printf("R%d: x%04X  %-6d", i, x, x);
 
         const bool is_end_of_row = (i + 1) % cols == 0;
